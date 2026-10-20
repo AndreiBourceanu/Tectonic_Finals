@@ -153,6 +153,50 @@ const MIGRATIONS = [
     name TEXT NOT NULL
   );
   INSERT INTO countries(code, name) VALUES ('BE','Belgium'),('NL','Netherlands'),('DE','Germany');
+  `,
+  // v6: keep it trusted without extra work
+  //  - documents can be verified in one click (verified_on resets freshness) and have a lifecycle
+  //  - people can leave a role (active = 0), which makes their documents ownerless
+  //  - signals: traces of everyday work (chat answers, tickets, commits) that reveal who knows what
+  //  - verifications: the few targeted one-click checks the steward decides are worth a human's time
+  //  - activity: a transparent log of everything that happened in the background
+  `
+  ALTER TABLE documents ADD COLUMN verified_on TEXT;
+  ALTER TABLE documents ADD COLUMN verified_by TEXT;
+  ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'live';
+  ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE signals (
+    id     INTEGER PRIMARY KEY,
+    person TEXT NOT NULL,
+    topic  TEXT NOT NULL REFERENCES questions(id),
+    kind   TEXT NOT NULL CHECK (kind IN ('chat_answer','ticket','commit','meeting','expert_reply')),
+    month  TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'),
+    detail TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX idx_signals_topic ON signals(topic);
+
+  CREATE TABLE verifications (
+    id          INTEGER PRIMARY KEY,
+    file        TEXT NOT NULL,
+    person      TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('conflict','confirm','handover','draft')),
+    reason      TEXT NOT NULL,
+    priority    INTEGER NOT NULL DEFAULT 0,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')),
+    response    TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    answered_at TEXT
+  );
+  CREATE INDEX idx_verifications_open ON verifications(status, person);
+
+  CREATE TABLE activity (
+    id      INTEGER PRIMARY KEY,
+    at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    kind    TEXT NOT NULL,
+    message TEXT NOT NULL
+  );
   `
 ];
 

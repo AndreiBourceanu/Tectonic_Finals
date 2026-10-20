@@ -16,7 +16,9 @@ function seedIfEmpty(repo, seedFile = SEED_FILE) {
   repo.transaction(() => {
     repo.setSetting('now', seed.now);
     for (const q of seed.questions) repo.upsertQuestion(q);
+    for (const p of seed.people || []) repo.addPerson(p);
     for (const d of seed.documents) repo.createDocument({ ...d, source: 'seed' }, 'seed');
+    for (const s of seed.signals || []) repo.addSignal(s); // traces of everyday work (chat, tickets, commits)
   });
   return true;
 }

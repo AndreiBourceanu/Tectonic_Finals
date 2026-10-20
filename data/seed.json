@@ -180,5 +180,146 @@
       "answer": "Team lead and finance",
       "body": "# Payslip corrections\n_Edited September 2022, author unknown._\n\nRetroactive corrections need approval from the **team lead and finance**. Send the request through the ticket form."
     }
+  ],
+  "people": [
+    "Pieter Claes (Payroll BE)",
+    "Ines Mertens (HR Onboarding)",
+    "Koen Willems (Payroll NL)",
+    "Bram Peeters (Payroll Engine)"
+  ],
+  "signals": [
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "chat_answer",
+      "month": "2026-05",
+      "detail": "answered a leaver bonus question in #payroll-help"
+    },
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "chat_answer",
+      "month": "2026-07",
+      "detail": "answered a leaver bonus question in #payroll-help"
+    },
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "chat_answer",
+      "month": "2026-08",
+      "detail": "answered a leaver bonus question in #payroll-help"
+    },
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "chat_answer",
+      "month": "2026-09",
+      "detail": "answered a leaver bonus question in #payroll-help"
+    },
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "ticket",
+      "month": "2026-06",
+      "detail": "closed a leaver bonus payroll ticket"
+    },
+    {
+      "person": "Pieter Claes",
+      "topic": "leaver-bonus",
+      "kind": "ticket",
+      "month": "2026-08",
+      "detail": "closed a leaver bonus payroll ticket"
+    },
+    {
+      "person": "Nadia Peeters",
+      "topic": "leaver-bonus",
+      "kind": "chat_answer",
+      "month": "2026-03",
+      "detail": "answered in #payroll-help"
+    },
+    {
+      "person": "Tom de Vries",
+      "topic": "leaver-bonus",
+      "kind": "meeting",
+      "month": "2026-01",
+      "detail": "Acme contract review"
+    },
+    {
+      "person": "Jan Weber",
+      "topic": "leaver-bonus",
+      "kind": "ticket",
+      "month": "2026-07",
+      "detail": "German leaver asked about their bonus"
+    },
+    {
+      "person": "Ines Mertens",
+      "topic": "new-hire-deadline",
+      "kind": "ticket",
+      "month": "2026-07",
+      "detail": "new hire reported late"
+    },
+    {
+      "person": "Ines Mertens",
+      "topic": "new-hire-deadline",
+      "kind": "ticket",
+      "month": "2026-08",
+      "detail": "new hire reported late"
+    },
+    {
+      "person": "Ines Mertens",
+      "topic": "new-hire-deadline",
+      "kind": "ticket",
+      "month": "2026-09",
+      "detail": "new hire reported late"
+    },
+    {
+      "person": "Lea Martin",
+      "topic": "new-hire-deadline",
+      "kind": "meeting",
+      "month": "2026-06",
+      "detail": "onboarding process update"
+    },
+    {
+      "person": "Koen Willems",
+      "topic": "retro-correction",
+      "kind": "chat_answer",
+      "month": "2026-04",
+      "detail": "explained who approves corrections in #ops"
+    },
+    {
+      "person": "Koen Willems",
+      "topic": "retro-correction",
+      "kind": "chat_answer",
+      "month": "2026-08",
+      "detail": "explained who approves corrections in #ops"
+    },
+    {
+      "person": "Bram Peeters",
+      "topic": "retro-correction",
+      "kind": "commit",
+      "month": "2026-06",
+      "detail": "approval rule in the payroll engine"
+    },
+    {
+      "person": "Bram Peeters",
+      "topic": "retro-correction",
+      "kind": "commit",
+      "month": "2026-06",
+      "detail": "approval rule in the payroll engine"
+    },
+    {
+      "person": "Bram Peeters",
+      "topic": "retro-correction",
+      "kind": "commit",
+      "month": "2026-07",
+      "detail": "approval rule in the payroll engine"
+    },
+    {
+      "person": "Sara Janssens",
+      "topic": "retro-correction",
+      "kind": "meeting",
+      "month": "2025-12",
+      "detail": "approval matrix sign-off"
+    }
   ]
 }
