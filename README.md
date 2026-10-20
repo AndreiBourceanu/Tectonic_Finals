@@ -1,6 +1,6 @@
 # Trust Lens
 
-Trust Lens is the bridge between the customer organisation's search engine/AI and its users.
+Trust Lens is the bridge between the customer organisation's search engine/AI and its users. **It keeps itself trusted without becoming another task**: it reads new content, learns who really knows what from everyday work, reacts to role changes, and only asks a person for one click when their judgement actually adds value.
 
 Answers with visible trust. For every question, Trust Lens finds the relevant company documents, scores each one on **freshness, ownership, applicability and agreement**, and tells you whether you can rely on the answer, should check first, or should not act yet. It surfaces conflicts between sources, flags knowledge gaps, and names who to ask.
 
@@ -15,8 +15,9 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 72 tests (node:test, in-memory databases)
-npm run demo         # scripted CLI demo: good / conflict / gap / gap closed live
+npm test             # 84 tests (node:test, in-memory databases, no network)
+npm run demo         # scripted CLI demo: good / conflict / gap, then the finals story (checks, HR event, expert answer, connector)
+npm run llm:check    # confirms your Gemini key works (never prints the key)
 npm run reseed       # delete the database file and load the demo data again
 npm run llm:check    # confirms your Gemini key works (never prints the key)
 ```
@@ -28,12 +29,13 @@ npm run llm:check    # confirms your Gemini key works (never prints the key)
 | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
 | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
 | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
-| `GEMINI_API_KEY` | unset | enables the Gemini integration (see "LLM integration") |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini model name |
+| `GEMINI_API_KEY` | unset | enables Gemini everywhere: upload metadata (`src/llm.js`) and the background reading, question routing and agreement (`src/ai.js`). Can also live in a `.env` file (see "LLM integration") |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini model name, shared by both AI modules |
 | `LLM_PROVIDER` | `gemini` | set to `none` to switch the LLM off even when a key is present |
-| `GEMINI_API_MODE` | `auto` | `auto`, `interactions` or `generateContent` (which Gemini API route to use) |
+| `GEMINI_API_MODE` | `auto` | `auto`, `interactions` or `generateContent` (which Gemini API route the upload metadata uses) |
 | `GEMINI_BASE_URL` | Google's URL | override for tests or a proxy |
-| `GEMINI_TIMEOUT_MS` | `30000` | how long to wait for Gemini before using the fallback |
+| `GEMINI_TIMEOUT_MS` | `30000` | how long to wait for Gemini on uploads before using the fallback |
+| `TRUST_AI` | on | set to `off` to force the keyword fallback in `src/ai.js` (tests do this) |
 
 ## How everything works
 
@@ -169,9 +171,11 @@ The home page has a **search bar** with a country selector, and an **Add or upda
 
 How it works (`src/llm.js`, plain HTTPS, no SDK): on upload, the server first validates the request (bad email, wrong file type, empty or duplicate files never reach the model), then sends the document text (max 12,000 characters) with a prompt that treats it as untrusted data and offers the known document types. The answer must be JSON with `summary`, `keywords` and `type`; it is validated and cleaned (lengths, allowed characters, at most 8 keywords) before use. The model suggests a type only for **new** documents and only when the user left Type empty; a suggested new type is added to the types table. The call happens before the database transaction, never inside it, with a 30 s timeout (per attempt, one retry on timeout) and one retry after a 429 or 503. Any failure (no key, rate limit, timeout, unusable answer) falls back to the heuristic, so uploads never fail because of the LLM; the upload response and the page say which was used (`llm: {used, model, error}`). The key is sent only in a request header and is removed from any logged or returned error text.
 
-Tests and the demo never call Gemini: the LLM client is only created when the server is started with `npm start`.
+Tests never call Gemini (the upload client is only created by `npm start`, and the tests set `TRUST_AI=off`).
 
-Data: with a free-tier key, Google's terms allow prompts to be used to improve its products. Use only fictional or non-confidential documents, or a billing-enabled project. The model is not used for search routing yet.
+Data: with a free-tier key, Google's terms allow prompts to be used to improve its products. Use only fictional or non-confidential documents, or a billing-enabled project.
+
+The same key also drives `src/ai.js` (free-text question routing, reading connector content, semantic agreement between sources, chat-answer summaries); see "Keep it trusted" below. Both modules use `GEMINI_MODEL`.
 
 ### 5e. Search (`src/ask.js`, `POST /api/ask`)
 
@@ -225,6 +229,71 @@ Run `npm run demo` to see all four in the terminal.
 - `ask.test.js`: closed-vocabulary check, query prompt, search without and with the model (stubbed), model failure, cache, standalone documents, relevance order, gap log, and the draft step (which sources are sent, only those applying to the country, no call when none apply, failure, cache, prompt caps and injection guard, citation validation).
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
 
+## Keep it trusted (finals: "Can your solution stay trusted without becoming another task?")
+
+The goal is not zero human involvement, it is zero unnecessary effort. Each question of the challenge maps to a mechanism in the code.
+
+### 1. What happens automatically?
+
+| Signal from existing tools | What Trust Lens does on its own | Code |
+|---|---|---|
+| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Gemini reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
+| An employee types a question in their own words (`POST /api/ask`) | Gemini routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
+| Everyday work: chat answers, resolved tickets, commits, edits, ownership, one-click confirmations | Builds the **who really knows this** ranking. Every trace fades with a 6-month half-life, so people who moved on stop being suggested without anyone updating a skills matrix. Every suggestion says *why*. | `src/expertise.js`, `repo.signalsForTopic` |
+| The HR system reports a role change (`POST /api/events/role-change`), which SD Worx already knows | The person's documents lose their accountable owner (owner score 0, visible in the explanation) and a handover is proposed to the person the work signals point to. | `src/steward.js` (`roleChange`) |
+| An expert answers a colleague in Teams (`POST /api/expert-replies`) | The answer is captured as a draft source, summarised and checked for agreement. One click publishes it and the gap closes. | `src/steward.js` (`expertReply`) |
+
+Without `GEMINI_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
+
+### 2. When is human verification genuinely valuable?
+
+The **steward** (`src/steward.js`) sweeps every question in every country in the background: on start, after every unreliable answer, after every document or HR change. It only creates a one-click check when:
+
+| Check | Sent to | When | One click |
+|---|---|---|---|
+| Conflict | the accountable owner of the strongest source | sources disagree **and someone actually asked that question** | *Mine is right* / *The other one is right* |
+| Needs an owner | the top expert from the work signals | a source answers rely on lost its owner | *I'll own it* / *Not me* (then the next candidate) |
+| Still correct? | the owner | the source answers rely on has not been touched for 12 months | *Still correct* / *Outdated* |
+| Your chat answer | the expert who answered | their chat answer was captured | *Publish* / *Discard* |
+
+### 3. How is maintenance kept from becoming a burden?
+
+- **Attention budget:** at most 2 open checks per person; the rest waits, ranked by impact (how often the answer was needed).
+- **No periodic reviews:** latent conflicts nobody asked about are counted, not sent.
+- **Never asked twice:** an answered check is not repeated until the document changes.
+- **Confirming is enough:** a one-click "still correct" resets freshness (freshness counts from the later of "written" and "confirmed"), so nobody rewrites a document just to make it look recent.
+- **Clean-up is automatic:** an ownerless source contradicted by its accountable owner is retired and stops appearing in answers.
+
+### 4. How does it fit the user's workflow?
+
+The API is the product: connectors push content in, the answer card and the one-click checks can be rendered in Teams, Slack or an intranet. The home page routes free text through `/api/ask` (so "in Germany" sets the country), and simulates a Teams reply ("Ask in Teams") and two connector events (HR system, Teams channel).
+
+### 5. How does it stay understandable without demanding attention?
+
+- **Calm when it works:** a green answer is one discreet line (answer, source, score). The reasoning is one click away ("Why?").
+- **Clear when action is needed:** amber and red answers show the conflict, who really knows (with the reasons) and what Trust Lens already did about it.
+- **Transparent background:** "Behind the scenes" (`GET /api/activity`) lists everything that happened automatically, plus how much was *not* asked.
+
+### New API routes
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/ask` | body `{text, country}`. Free-text question, routed to a topic; returns `matched`, `route` and the full answer |
+| POST | `/api/ingest` | body `{title, body, type?, owner?, countries?, source?}`. Connector entry point, classified automatically |
+| GET | `/api/experts/:topic` | who really knows a topic, with reasons |
+| GET | `/api/verifications` | open one-click checks, highest impact first |
+| POST | `/api/verifications/:id` | body `{response}`, one of the two choices of that check |
+| POST | `/api/events/role-change` | body `{person, newRole?}`. HR webhook |
+| POST | `/api/expert-replies` | body `{questionId, country, person, text}`. Capture a chat answer as a draft |
+| POST | `/api/steward/run` | run a background sweep now |
+| GET | `/api/activity` | what happened in the background, counters and what is being watched |
+
+Uploads (`/api/upload`) and document writes trigger a background sweep too. Every answer (`/api/answer`, `/api/ask`) now also returns `experts` (learned from signals) next to the original `expert` field.
+
+### Schema v6
+
+Migration 6 (after the upload, keyword, type and country migrations 2 to 5) adds `documents.verified_on`, `verified_by`, `status` (`live`, `draft`, `retired`), `people.active`, and the tables `signals` (traces of work), `verifications` (one-click checks) and `activity` (background log). Existing databases upgrade automatically.
+
 ## Project layout
 
 ```
@@ -239,7 +308,10 @@ src/env.js           .env / *.env loader
 src/metadata.js      built-in fallback for summary/keywords
 scripts/llm-check.js checks the Gemini key
 src/seed.js          loads demo data into an empty database
-src/trust.js         scoring and verdict logic
+src/trust.js         scoring and verdict logic (freshness counts from the last confirmation)
+src/expertise.js     who really knows a topic, learned from work signals that fade with time
+src/steward.js       background sweep, attention budget, one-click checks, HR events, expert answers
+src/ai.js            Gemini (routing, classification, agreement, summaries) with a keyword fallback
 src/server.js        HTTP API and static UI
 public/index.html    UI
 test/                unit, database and API tests
@@ -253,7 +325,8 @@ demo/demo.js         scripted CLI demo
 - **Add a country:** add it to `COUNTRIES` in `src/trust.js` and to the dropdown in `public/index.html`.
 - **Schema changes:** append a new string to `MIGRATIONS` in `src/db.js`. Never edit an existing one.
 - **Different database:** all SQL is in `src/repo.js`, so moving to PostgreSQL means reimplementing that one file.
-- **Automatic claim extraction:** replace the hand-provided `claim` and `answer` with an LLM step that runs when a document is created or updated.
+- **Automatic claim extraction:** done through `POST /api/ingest` (Gemini, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
+- **Real connectors:** point a Teams/Slack/wiki webhook at `/api/ingest` and the HR system at `/api/events/role-change`.
 
 ## Limitations (proof of concept)
 
@@ -262,6 +335,8 @@ demo/demo.js         scripted CLI demo
 - The LLM fills metadata on upload and interprets search queries. It does not yet extract claims or link documents to questions, so an uploaded document is scored alone (no agreement or conflict) until someone gives it a topic and claim through the API.
 - The drafted answer is only as good as the attached text: long documents are cut at 6,000 characters, and a model can still misread a source. That is why it cites its sources and sits next to the trust scores.
 - Search quality depends on the keywords stored. With thousands of keywords the list sent to the model would need pre-filtering.
+- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Gemini catches.
+- Work signals (chat, tickets, commits) and HR events are simulated in `data/seed.json` and the demo controls; real connectors would post to `/api/ingest` and `/api/events/role-change`.
 - Scores are transparent heuristics, not calibrated against real outcomes.
 - No authentication: no accounts, permissions or email verification, and all write routes are open.
 - Uploads are limited to `.md`/`.txt` files of about 200 KB. No PDF or Word parsing yet.

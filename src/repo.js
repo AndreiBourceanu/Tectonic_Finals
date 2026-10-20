@@ -17,7 +17,7 @@ const KEYWORD_RE = /^[\p{L}\p{N}][\p{L}\p{N} -]{0,39}$/u;
 const bad = msg => { throw new HttpError(400, msg); };
 
 const DOC_SELECT = `
-  SELECT d.*, p.name AS owner_name, p.role AS owner_role, p.email AS owner_email,
+  SELECT d.*, p.name AS owner_name, p.role AS owner_role, p.email AS owner_email, p.active AS owner_active,
     e.name AS editor_name, e.role AS editor_role, e.email AS editor_email,
     (SELECT group_concat(country, ',') FROM
        (SELECT country FROM document_countries c WHERE c.document_id = d.id ORDER BY country)) AS countries,
@@ -39,7 +39,9 @@ function toDoc(r, withBody = false) {
     summary: r.summary, keywords: r.keywords ? r.keywords.split(',') : [],
     originalName: r.original_name, sizeBytes: r.size_bytes, contentHash: r.content_hash,
     source: r.source, metaSource: r.meta_source,
-    version: r.version, createdAt: r.created_at, updatedAt: r.updated_at
+    version: r.version, createdAt: r.created_at, updatedAt: r.updated_at,
+    status: r.status || 'live', verifiedOn: r.verified_on || null, verifiedBy: r.verified_by || null,
+    ownerName: r.owner_name || null, ownerActive: r.owner_name ? r.owner_active !== 0 : true
   };
   if (withBody) doc.body = r.body;
   return doc;
@@ -107,9 +109,9 @@ function createRepo(db) {
     `SELECT k.keyword, COUNT(dk.document_id) AS uses FROM keywords k LEFT JOIN document_keywords dk ON dk.keyword = k.keyword
      GROUP BY k.keyword ORDER BY uses DESC, k.keyword LIMIT ?`, limit).map(r => ({ keyword: r.keyword, uses: r.uses }));
   const listPeople = () => all(
-    `SELECT p.id, p.name, p.role, p.email, COUNT(d.id) AS owned FROM people p
+    `SELECT p.id, p.name, p.role, p.email, p.active, COUNT(d.id) AS owned FROM people p
      LEFT JOIN documents d ON d.owner_id = p.id GROUP BY p.id ORDER BY p.name`
-  ).map(r => ({ id: r.id, name: r.name, role: r.role, email: r.email, owned: r.owned }));
+  ).map(r => ({ id: r.id, name: r.name, role: r.role, email: r.email, active: r.active !== 0, owned: r.owned }));
 
   // ---- documents -----------------------------------------------------------------------
   const countDocuments = () => one('SELECT COUNT(*) AS n FROM documents').n;
@@ -120,7 +122,7 @@ function createRepo(db) {
   function getQuestionWithSources(id) {
     const q = one('SELECT id, text, expert FROM questions WHERE id = ?', id);
     if (!q) return null;
-    const sources = all(`${DOC_SELECT} WHERE d.topic = ? ORDER BY d.file`, id).map(r => toDoc(r));
+    const sources = all(`${DOC_SELECT} WHERE d.topic = ? AND d.status = 'live' ORDER BY d.file`, id).map(r => toDoc(r));
     return { id: q.id, text: q.text, expert: q.expert, sources };
   }
 
@@ -421,7 +423,74 @@ function createRepo(db) {
     return { total: one('SELECT COUNT(*) AS n FROM answer_log').n, ranked, recent };
   }
 
+
+  // ---- keep it trusted: people changes, signals, verifications, activity --------------
+  const questionTexts = () => all('SELECT id, text, expert FROM questions ORDER BY rowid');
+  const addPerson = label => personId(label);
+  const personLabel = name => {
+    const r = one('SELECT name, role FROM people WHERE name = ? ORDER BY active DESC, id DESC LIMIT 1', name);
+    return r ? label(r.name, r.role) : name;
+  };
+  // An HR event: the person leaves their current role(s). Optionally they start a new one.
+  function changeRole(name, newRole) {
+    return transaction(() => {
+      const before = all('SELECT id, role FROM people WHERE name = ? AND active = 1', name);
+      if (!before.length) throw new HttpError(404, `No active person called "${name}"`);
+      run('UPDATE people SET active = 0 WHERE name = ?', name);
+      if (newRole) {
+        run('INSERT OR IGNORE INTO people(name, role) VALUES(?, ?)', name, newRole);
+        run('UPDATE people SET active = 1 WHERE name = ? AND role = ?', name, newRole);
+      }
+      const orphaned = all(`${DOC_SELECT} WHERE p.name = ? AND p.active = 0 AND d.status = 'live' ORDER BY d.file`, name).map(r => toDoc(r));
+      return { name, oldRoles: before.map(b => b.role), newRole: newRole || null, orphaned };
+    });
+  }
+
+  function addSignal({ person, topic, kind, month, detail = '' }) {
+    if (!one('SELECT 1 AS x FROM questions WHERE id = ?', topic)) bad(`Unknown topic "${topic}"`);
+    if (!DATE_RE.test(month || '')) bad('month must be YYYY-MM');
+    run('INSERT INTO signals(person, topic, kind, month, detail) VALUES(?,?,?,?,?)', String(person).slice(0, 120), topic, kind, month, String(detail).slice(0, 300));
+  }
+  // Every trace of work on a topic: explicit signals plus what the database already knows
+  // (who owns, edited and confirmed its documents). Nobody fills in a skills profile.
+  function signalsForTopic(topic) {
+    const out = all('SELECT person, kind, month, detail FROM signals WHERE topic = ?', topic);
+    for (const r of all(`SELECT p.name, d.doc_date FROM documents d JOIN people p ON p.id = d.owner_id
+                         WHERE d.topic = ? AND d.status = 'live' AND p.active = 1`, topic)) out.push({ person: r.name, kind: 'owner', month: r.doc_date });
+    for (const r of all(`SELECT v.edited_by, substr(v.edited_at, 1, 7) AS m FROM document_versions v JOIN documents d ON d.id = v.document_id
+                         WHERE d.topic = ? AND v.edited_by NOT IN ('seed', 'api', 'steward')`, topic)) out.push({ person: r.edited_by, kind: 'edit', month: r.m });
+    for (const r of all(`SELECT verified_by, verified_on FROM documents WHERE topic = ? AND verified_by IS NOT NULL`, topic)) out.push({ person: r.verified_by, kind: 'verified', month: r.verified_on });
+    return out;
+  }
+  const peopleRaw = () => all('SELECT name, role, active FROM people').map(r => ({ name: r.name, role: r.role, active: r.active !== 0 }));
+
+  const setVerified = (file, person, month) => run('UPDATE documents SET verified_on = ?, verified_by = ? WHERE file = ?', month, person, file);
+  const setStatus = (file, status) => run('UPDATE documents SET status = ? WHERE file = ?', status, file);
+  const documentsByStatus = status => all(`${DOC_SELECT} WHERE d.status = ? ORDER BY d.file`, status).map(r => toDoc(r));
+
+  const toVer = r => r && ({ id: r.id, file: r.file, person: r.person, kind: r.kind, reason: r.reason, priority: r.priority,
+    payload: JSON.parse(r.payload), status: r.status, response: r.response, createdAt: r.created_at, answeredAt: r.answered_at });
+  function createVerification({ file, person, kind, reason, priority = 0, payload = {} }) {
+    const { lastInsertRowid } = run('INSERT INTO verifications(file, person, kind, reason, priority, payload) VALUES(?,?,?,?,?,?)',
+      file, person, kind, reason, Math.round(priority), JSON.stringify(payload));
+    return toVer(one('SELECT * FROM verifications WHERE id = ?', Number(lastInsertRowid)));
+  }
+  const getVerification = id => toVer(one('SELECT * FROM verifications WHERE id = ?', id));
+  const openVerifications = () => all("SELECT * FROM verifications WHERE status = 'open' ORDER BY priority DESC, id").map(toVer);
+  const openCountFor = person => one("SELECT COUNT(*) AS n FROM verifications WHERE status = 'open' AND person = ?", person).n;
+  const hasVerification = (file, kind) => !!one("SELECT 1 AS x FROM verifications WHERE file = ? AND kind = ? AND (status = 'open' OR answered_at > (SELECT COALESCE(MAX(updated_at), '') FROM documents WHERE file = ?))", file, kind, file);
+  const closeVerification = (id, response) => run("UPDATE verifications SET status = 'done', response = ?, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", response, id);
+  const verificationStats = () => one(`SELECT COUNT(*) AS total, SUM(status = 'open') AS open, SUM(status = 'done') AS done FROM verifications`);
+
+  const logActivity = (kind, message) => run('INSERT INTO activity(kind, message) VALUES(?, ?)', kind, message);
+  const listActivity = (limit = 30) => all('SELECT at, kind, message FROM activity ORDER BY id DESC LIMIT ?', limit);
+  const activityCounts = () => Object.fromEntries(all('SELECT kind, COUNT(*) AS n FROM activity GROUP BY kind').map(r => [r.kind, r.n]));
+  const askedCount = (questionId, country) => one('SELECT COUNT(*) AS n FROM answer_log WHERE question_id = ? AND country = ?', questionId, country).n;
+
   return {
+    questionTexts, addPerson, personLabel, changeRole, addSignal, signalsForTopic, peopleRaw,
+    setVerified, setStatus, documentsByStatus, createVerification, getVerification, openVerifications, openCountFor,
+    hasVerification, closeVerification, verificationStats, logActivity, listActivity, activityCounts, askedCount,
     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
     saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, retrieve, getQuestion, documentVersions, logAnswer, gapReport
