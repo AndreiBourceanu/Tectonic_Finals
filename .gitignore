@@ -2,3 +2,5 @@ node_modules/
 data/trustlens.db*
 *.patch
 *.zip
+.env
+*.env

@@ -15,9 +15,11 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 59 tests (node:test, in-memory databases, no network)
+npm test             # 82 tests (node:test, in-memory databases, no network)
 npm run demo         # scripted CLI demo: good / conflict / gap, then the finals story (checks, HR event, expert answer, connector)
+npm run llm:check    # confirms your Gemini key works (never prints the key)
 npm run reseed       # delete the database file and load the demo data again
+npm run llm:check    # confirms your Gemini key works (never prints the key)
 ```
 
 | Environment variable | Default | Purpose |
@@ -27,9 +29,13 @@ npm run reseed       # delete the database file and load the demo data again
 | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
 | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
 | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
-| `GEMINI_API_KEY` | unset | when set (or `GOOGLE_API_KEY`), Google Gemini reads content, routes free-text questions and judges agreement |
-| `TRUST_AI_MODEL` | `gemini-3.8-flash` | Gemini model used by `src/ai.js` |
-| `TRUST_AI` | on | set to `off` to force the local keyword fallback (tests do this) |
+| `GEMINI_API_KEY` | unset | enables Gemini everywhere: upload metadata (`src/llm.js`) and the background reading, question routing and agreement (`src/ai.js`). Can also live in a `.env` file (see "LLM integration") |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini model name, shared by both AI modules |
+| `LLM_PROVIDER` | `gemini` | set to `none` to switch the LLM off even when a key is present |
+| `GEMINI_API_MODE` | `auto` | `auto`, `interactions` or `generateContent` (which Gemini API route the upload metadata uses) |
+| `GEMINI_BASE_URL` | Google's URL | override for tests or a proxy |
+| `GEMINI_TIMEOUT_MS` | `30000` | how long to wait for Gemini on uploads before using the fallback |
+| `TRUST_AI` | on | set to `off` to force the keyword fallback in `src/ai.js` (tests do this) |
 
 ## How everything works
 
@@ -148,12 +154,26 @@ Every answer that is not green is stored in `answer_log`, so it survives restart
 The home page has a **search bar** with a country selector, and an **Add or update a document** panel.
 
 - **Upload (`POST /api/upload`):** body `{email, fileName, content, countries, title?, type?, topic?, answer?, replaces?}`. A new upload is owned by the email given (the email becomes a `people` record). With `replaces: "<file>"` the document gets a new version, the original owner is kept, and the email is stored as last editor. Updating an ownerless document claims it. Only `.md` and `.txt` for now, with a maximum of 200,000 characters (about 200 KB) of text per document; the form checks this before sending, and the API answers `400` otherwise. Identical content is rejected as a duplicate.
-- **Generated metadata** (`src/metadata.js`, no LLM yet): title (first `# heading` or file name), summary, weighted keywords. Each document also stores owner email, last editor, last edited date, size, content hash, original file name, `source` (`api`, `upload`, `seed`) and `meta_source` (`heuristic`, `manual`, later `llm`). **`generate()` in `metadata.js` is the one function an LLM call replaces.** Keywords live in the `document_keywords` table (indexed) and drive search.
+- **Generated metadata:** title (first `# heading` or file name), summary, weighted keywords and a suggested type. With a Gemini key these come from the model (`meta_source` = `llm`); otherwise, or if Gemini fails, from the built-in heuristic in `src/metadata.js` (`heuristic`). Hand-written summaries and keywords are marked `manual`. Each document also stores owner email, last editor, last edited date, size, content hash, original file name and `source` (`api`, `upload`, `seed`). Keywords live in the `document_keywords` table (indexed) and drive search.
 - **Countries:** the "Applies to" checkboxes and the search country selector come from the `countries` table (it starts with Belgium, Netherlands and Germany). The upload form has an **Add country** box with all 249 official countries of ISO 3166-1 as suggestions. You can type the English name or the two-letter code (`France`, `fr`; a few common aliases such as `UK` work too). Anything that is not a real country is rejected (`400`), and a country is stored once. A new country can then be used on documents and in searches; a question with no document for it shows as a knowledge gap.
 - **Type:** the Type field is free text with the stored types as suggestions. An unknown type is added to the `document_types` table the first time it is used (the confirmation says so). Matching ignores case and extra spaces, so "meeting NOTES" reuses "Meeting notes". Types are 1 to 40 characters (letters, digits, spaces, `& / . -`). On an update, leaving the type empty keeps the current one.
 - **Keywords (optional):** the upload form has one Keywords field (comma separated). Manual keywords are added to the generated ones and ranked first. Every keyword is stored once in the global `keywords` table, so a new keyword is added the first time anyone uses it, and the form lists existing keywords as clickable suggestions. Manual keywords are kept when a document is updated without new keywords; giving new ones replaces the manual set. The upload response lists what was new to the database (`added.type`, `added.keywords`).
 - **Question links:** the upload form no longer links a document to a question. Uploaded documents are searchable by their keywords but do not take part in a trust verdict yet; the API (`topic`, `answer`, `claim` on `POST /api/upload` and `/api/documents`) still supports it, and the LLM step is meant to do this automatically.
 - **Search (`GET /api/search?q=`):** simulated. It matches the words against question texts and stored keywords and returns matching questions and documents. Opening a question shows the trust verdict. This is the part an LLM question-routing step replaces.
+
+### 5d. LLM integration (Gemini)
+
+1. Create a key in Google AI Studio and put it in a file in the project folder: `.env` or any `*.env` file, containing either `GEMINI_API_KEY=your-key` or just the key. (`GEMENI_API_KEY` is accepted as a spelling.) Environment variables set in your shell win over files. These files are git-ignored; **never commit a key**.
+2. Run `npm run llm:check` once. It first tests the network and key by listing the models your key can use (and whether `GEMINI_MODEL` is one of them), then analyses a sample document, with timings. It describes each env file (size, encoding, variable names, whether a key was detected; never the key itself) and whether Gemini answers in the expected shape. The loader also accepts `KEY: value` lines, UTF-16 files (what some Windows editors and PowerShell write) and a key pasted among other text.
+3. Run `npm start`. The first lines say `LLM: Gemini (...)` or `LLM: off`.
+
+How it works (`src/llm.js`, plain HTTPS, no SDK): on upload, the server first validates the request (bad email, wrong file type, empty or duplicate files never reach the model), then sends the document text (max 12,000 characters) with a prompt that treats it as untrusted data and offers the known document types. The answer must be JSON with `summary`, `keywords` and `type`; it is validated and cleaned (lengths, allowed characters, at most 8 keywords) before use. The model suggests a type only for **new** documents and only when the user left Type empty; a suggested new type is added to the types table. The call happens before the database transaction, never inside it, with a 30 s timeout (per attempt, one retry on timeout) and one retry after a 429 or 503. Any failure (no key, rate limit, timeout, unusable answer) falls back to the heuristic, so uploads never fail because of the LLM; the upload response and the page say which was used (`llm: {used, model, error}`). The key is sent only in a request header and is removed from any logged or returned error text.
+
+Tests never call Gemini (the upload client is only created by `npm start`, and the tests set `TRUST_AI=off`).
+
+Data: with a free-tier key, Google's terms allow prompts to be used to improve its products. Use only fictional or non-confidential documents, or a billing-enabled project.
+
+The same key also drives `src/ai.js` (free-text question routing, reading connector content, semantic agreement between sources, chat-answer summaries); see "Keep it trusted" below. Both modules use `GEMINI_MODEL`.
 
 ### 5c. Countries
 
@@ -185,6 +205,7 @@ Run `npm run demo` to see all four in the terminal.
 - `trust.test.js`: freshness buckets, agreement cap, applicability, conflicts, gaps, each verdict.
 - `db.test.js`: migrations, seeding, persistence across reopening a file, constraints, rollback on failure, answer log aggregation.
 - `documents.test.js`: live create and update, version history, validation, SQL injection safety, gap log.
+- `llm.test.js`, `env.test.js`: the Gemini client against mocked responses (both API routes, failures, retries, timeouts, key never leaked), prompt-injection guard, env file parsing, upload with a stubbed model, no model call for invalid or duplicate uploads.
 - `countries.test.js`: the ISO list, resolving names and codes, rejecting invented countries, using a new country, email to people record.
 - `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
@@ -262,7 +283,10 @@ data/trustlens.db    the database (created on first run, ignored by git)
 src/db.js            driver selection, connection and migrations
 src/repo.js          all SQL, validation and transactions
 src/countries.js     ISO 3166-1 country list and name/code resolver
-src/metadata.js      placeholder summary/keyword generation (LLM goes here)
+src/llm.js           Gemini client (JSON output, validation, fallback)
+src/env.js           .env / *.env loader
+src/metadata.js      built-in fallback for summary/keywords
+scripts/llm-check.js checks the Gemini key
 src/seed.js          loads demo data into an empty database
 src/trust.js         scoring and verdict logic (freshness counts from the last confirmation)
 src/expertise.js     who really knows a topic, learned from work signals that fade with time

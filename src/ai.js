@@ -6,16 +6,16 @@
 //  matchClaim()      does this statement say the same thing as an existing source? (semantic agreement)
 //  summarize()       long chat answer -> one short answer line
 //
-// With GEMINI_API_KEY (or GOOGLE_API_KEY) set, Google Gemini is used. Without it (or if the call
+// With GEMINI_API_KEY (or GOOGLE_API_KEY) set, Google Gemini is used (GEMINI_MODEL picks the model, shared with src/llm.js). Without it (or if the call
 // fails or times out), a transparent keyword fallback answers instead, so the demo never depends
 // on the network. Every result says which one produced it (`via`), so the UI can show it.
 const { COUNTRIES } = require('./trust');
 
-const MODEL = process.env.TRUST_AI_MODEL || 'gemini-3.8-flash';
+const MODEL = process.env.GEMINI_MODEL || process.env.TRUST_AI_MODEL || 'gemini-3.5-flash'; // same setting as src/llm.js
 const PROVIDER = 'Gemini';
 const TIMEOUT_MS = 12_000;
 const apiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-const enabled = () => !!apiKey() && process.env.TRUST_AI !== 'off';
+const enabled = () => !!apiKey() && process.env.TRUST_AI !== 'off' && (process.env.LLM_PROVIDER || 'gemini') !== 'none';
 
 // One call to the Gemini generateContent REST endpoint, asking for a JSON object back.
 async function geminiJson(system, prompt, maxTokens = 300) {
