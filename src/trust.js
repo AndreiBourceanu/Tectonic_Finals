@@ -9,20 +9,29 @@ function parseMonth(str) {
   return +m[1] * 12 + +m[2];
 }
 
+// Freshness counts from the latest of "written" and "confirmed by a human in one click":
+// an old document that its owner just confirmed is as fresh as a new one.
+const lastTouched = s => (s.verifiedOn && parseMonth(s.verifiedOn) > parseMonth(s.date) ? s.verifiedOn : s.date);
+// An owner who has left the role is accountable for nothing.
+const hasOwner = s => !!s.owner && s.ownerActive !== false;
+
 function scoreSource(s, country, all, now) {
-  const age = parseMonth(now) - parseMonth(s.date);
+  const touched = lastTouched(s);
+  const age = parseMonth(now) - parseMonth(touched);
   const fresh = age <= 6 ? 30 : age <= 18 ? 20 : age <= 36 ? 10 : 0;
-  const owner = s.owner ? 20 : 0;
+  const owner = hasOwner(s) ? 20 : 0;
   const applies = s.countries.includes(country) ? 30 : 0;
   const supporters = all.filter(z => z !== s && z.claim === s.claim && z.countries.includes(country)).length;
   const agreed = applies ? Math.min(20, supporters * 10) : 0;
-  return { fresh, owner, applies, agreed, age, total: fresh + owner + applies + agreed };
+  return { fresh, owner, applies, agreed, age, verified: touched !== s.date, total: fresh + owner + applies + agreed };
 }
 
 function explain(s, r, country) {
   return {
-    fresh: `Updated ${r.age < 1 ? 'this month' : r.age + ' months ago'}. ${r.fresh === 30 ? 'Fresh.' : r.fresh >= 20 ? 'Fairly recent.' : 'Getting old.'}`,
-    owner: s.owner ? `Owned by ${s.owner}.` : 'No named owner. Nobody is accountable for this.',
+    fresh: `${r.verified ? `Confirmed still correct by ${s.verifiedBy || 'its owner'}` : 'Updated'} ${r.age < 1 ? 'this month' : r.age + ' months ago'}. ${r.fresh === 30 ? 'Fresh.' : r.fresh >= 20 ? 'Fairly recent.' : 'Getting old.'}`,
+    owner: hasOwner(s) ? `Owned by ${s.owner}.`
+      : s.owner ? `${s.owner} has left this role. Nobody is accountable for it right now.`
+      : 'No named owner. Nobody is accountable for this.',
     applies: r.applies ? `Applies to ${country}.` : `Does not apply to ${country} (covers ${s.countries.join(', ')}).`,
     agreed: r.agreed ? `${r.agreed / 10} other applicable source(s) say the same.` : 'No other applicable source confirms this.'
   };
@@ -33,7 +42,8 @@ function answer(question, country, now, validCountries = COUNTRIES) {
   const sources = question.sources
     .map(s => {
       const score = scoreSource(s, country, question.sources, now);
-      return { file: s.file, title: s.title, type: s.type, date: s.date, owner: s.owner, countries: s.countries,
+      return { file: s.file, title: s.title, type: s.type, date: s.date, owner: s.owner, ownerActive: s.ownerActive !== false,
+               verifiedOn: s.verifiedOn || null, verifiedBy: s.verifiedBy || null, countries: s.countries,
                says: s.says, claim: s.claim, score, why: explain(s, score, country) };
     })
     .sort((a, b) => b.score.total - a.score.total);
@@ -56,11 +66,11 @@ function answer(question, country, now, validCountries = COUNTRIES) {
 
   return {
     questionId: question.id, question: question.text, country, verdict, label, answer: text,
-    basedOn: top ? { title: top.title, score: top.score.total } : null,
+    basedOn: top ? { file: top.file, title: top.title, score: top.score.total } : null,
     gap: !top,
-    conflict: alt ? { best: { title: top.title, says: top.says }, other: { title: alt.title, says: alt.says } } : null,
+    conflict: alt ? { best: { file: top.file, title: top.title, says: top.says }, other: { file: alt.file, title: alt.title, says: alt.says } } : null,
     expert, sources
   };
 }
 
-module.exports = { COUNTRIES, MAX, parseMonth, scoreSource, answer };
+module.exports = { COUNTRIES, MAX, parseMonth, scoreSource, answer, lastTouched, hasOwner };

@@ -33,7 +33,7 @@ test('seeding loads the corpus and is idempotent', () => {
   assert.equal(repo.getSetting('now'), '2026-09');
   assert.equal(seedIfEmpty(repo), false);
   assert.equal(repo.countDocuments(), 11);
-  assert.equal(repo.listPeople().length, 6);
+  assert.equal(repo.listPeople().length, 10); // 6 document owners + 4 colleagues seen only in work signals
   db.close();
 });
 

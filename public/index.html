@@ -60,6 +60,30 @@ pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;backg
 details>summary{cursor:pointer;font-weight:600;padding:6px 0}
 @media(max-width:600px){.seg{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.search .c{flex:1 1 100%;width:100%}.meta{grid-template-columns:1fr}}
 footer{margin-top:28px;color:var(--mute);font-size:.85rem}
+/* ---- keep it trusted ---- */
+.calm{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:12px;padding:14px 16px;background:var(--card)}
+.calm .tick{color:var(--ok);font-weight:700;font-size:1.3rem;line-height:1.2}
+.calm .a{font-size:1.15rem;font-weight:600}
+.calm .m{font-size:.86rem;color:var(--mute)}
+.who{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.who small{display:block;color:var(--mute)}
+.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font:inherit;cursor:pointer}
+textarea.reply{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);min-height:80px;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.check{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.check .for{font-size:.78rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.check p{margin:6px 0 10px;font-size:.92rem}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.empty{color:var(--mute);border:1px dashed var(--line);border-radius:12px;padding:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat b{display:block;font-size:1.6rem;line-height:1.1}
+.stat span{font-size:.82rem;color:var(--mute)}
+ol.log{list-style:none;margin:0;padding:0;font-size:.9rem;max-height:420px;overflow:auto}
+ol.log li{padding:8px 0;border-top:1px solid var(--line);display:flex;gap:10px}
+ol.log li .k{flex:0 0 96px;color:var(--mute);font-size:.78rem;padding-top:2px}
+.demo{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+@media(max-width:600px){ol.log li{flex-direction:column;gap:0}ol.log li .k{flex:none}}
 </style></head><body><main>
 <h1>Don’t just find the answer. See why you can rely on it.</h1>
 <p class="lead">Ask a question. Trust Lens ranks every source by how fresh it is, who owns it, whether it applies to this country, and whether others agree. It shows conflicts and who to ask when documents are not enough.</p>
@@ -72,6 +96,18 @@ footer{margin-top:28px;color:var(--mute);font-size:.85rem}
 <div class="chips" id="sugg" aria-label="Suggested questions"></div>
 <div id="results" aria-live="polite"></div>
 <div id="answer" aria-live="polite"></div>
+
+<h2 id="checks">One-click checks <small class="mute" id="budget" style="font-weight:400;font-size:.85rem"></small></h2>
+<div id="inbox"></div>
+<h2>Behind the scenes <small class="mute" style="font-weight:400;font-size:.85rem">what happened automatically, so nobody had to</small></h2>
+<div class="stats" id="stats"></div>
+<ol class="log" id="log"></ol>
+<details style="margin:12px 0 0"><summary>Demo controls: simulate signals from existing tools</summary>
+ <div class="demo">
+  <button type="button" class="ghost" onclick="hrEvent()">HR system: Nadia Peeters moves to Finance Ops</button>
+  <button type="button" class="ghost" onclick="teamsMsg()">Teams: a new #payroll-help message arrives (NL)</button>
+ </div>
+</details>
 
 <h2 id="upl">Add or update a document</h2>
 <form class="card" id="uf" novalidate>
@@ -126,9 +162,13 @@ async function search(q){
  try{
   const r=await api('/api/search?q='+encodeURIComponent(q));
   S.last=r;
+  // Gemini (or the keyword fallback) understands free text, including the country it mentions
+  let ask=null;try{ask=await api('/api/ask',{text:q,country:$('c').value})}catch{}
+  if(ask&&ask.matched&&ask.country&&ask.country!==$('c').value)$('c').value=ask.country;
   let h='';
   if(r.questions.length){h+='<h2>Questions we can answer</h2>'+r.questions.map(x=>`<button type="button" class="qbtn" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('')}
   if(r.documents.length){h+='<h2>Matching documents</h2>'+r.documents.map(docCard).join('')}
+  if(!r.questions.length&&ask&&ask.matched){box.innerHTML='<p class="mute" style="font-size:.85rem">Understood as <strong>'+esc(ask.question)+'</strong> · routed by '+esc(ask.route.via)+'</p>'+h;showAnswer(ask.questionId);return}
   if(!h)h='<div class="banner"><strong>Nothing found.</strong> No document matches these words. That is a knowledge gap: try other words, or add a document below.</div>';
   box.innerHTML=h;
   const[a,b]=r.questions;if(a&&(!b||a.score>=b.score*1.5))showAnswer(a.id); // open automatically when one question clearly leads
@@ -138,20 +178,36 @@ function rerenderDocs(){if(S.last)search($('q').value.trim())}
 
 /* ---------- verdict ---------- */
 async function showAnswer(id){
+ if(S.qid!==id){S.why=false;S.compose=null}
  S.qid=id;let d;
  try{d=await api('/api/answer',{questionId:id,country:$('c').value})}
  catch(e){$('answer').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
- let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2><div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
+ S.d=d;
+ let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2>`;
+ if(d.verdict==='rely'){
+  const top=d.sources.find(s=>s.file===d.basedOn.file),conf=top&&top.score.verified?` · confirmed by ${esc(top.verifiedBy)}`:'';
+  h+=`<div class="calm"><div class="tick" aria-hidden="true">✓</div><div><div class="a">${esc(d.answer)}</div><div class="m">Reliable · ${esc(d.basedOn.title)} · ${d.basedOn.score}/100${conf} · <button type="button" class="link" style="margin:0" onclick="S.why=!S.why;S.noScroll=true;showAnswer(S.qid).then(()=>S.noScroll=false)">${S.why?'Hide why':'Why?'}</button></div></div></div>`;
+  if(!S.why){$('answer').innerHTML=h;side();if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});return}
+  h+='<div>';
+ }else{
+ h+=`<div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
  if(d.basedOn)h+=`<div>Based on <strong>${esc(d.basedOn.title)}</strong>, trust score <strong>${d.basedOn.score}/100</strong>.</div>`;
- if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. The first has the stronger evidence, yet someone should confirm.</div>`;
- if(d.expert)h+=`<div class="next"><strong>Who can help:</strong> ${esc(d.expert)}</div>`;
+ if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. Trust Lens has asked the accountable owner for one click.</div>`;
+ h+=`<div class="next"><strong>Who really knows this</strong> <span class="tag">learned from everyday work, nobody filled in a profile</span>`;
+ if(!(d.experts||[]).length)h+=`<div>${esc(d.expert||'Nobody yet.')}</div>`;
+ (d.experts||[]).forEach((x,i)=>{
+  h+=`<div class="who"><div><strong>${esc(x.name)}</strong>${x.role?' · '+esc(x.role):''}<small>${esc(x.why.join(' · '))}</small></div><button type="button" class="ghost" onclick="S.compose=${i};S.noScroll=true;showAnswer(S.qid).then(()=>S.noScroll=false)">Ask in Teams</button></div>`;
+  if(S.compose===i)h+=`<div><small class="mute">Simulated: ${esc(x.name)} replies in Teams. Trust Lens captures the reply as a draft source.</small><textarea class="reply" id="reply">${esc(d.country==='DE'?'In Germany the leaver bonus is pro rata by months worked, same as Belgium. It is in the 2025 works council agreement.':'It is pro rata by months worked. The chat message saying “full bonus after 1 October” is outdated.')}</textarea><button type="button" class="btn" onclick="sendReply('${esc(x.name)}')">Send reply as ${esc(x.name)}</button></div>`;
+ });
+ h+='</div>';
+ }
  h+='</div><h2>Sources, ranked. Tap a bar to see why.</h2>';
  d.sources.forEach((s,i)=>{
   const key=d.questionId+i+d.country,sel=S.open[key]||'applies',r=s.score;
   const seg=SEGS.map(([k,l,m])=>`<button type="button" data-bar="${esc(key)}|${k}" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
   h+=`<div class="card src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div class="mute">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button type="button" class="link" data-open="${esc(s.file)}">${S.shown[s.file]?'Hide':'Open'} source file</button>${S.shown[s.file]?'<pre class="file">'+esc(S.texts[s.file])+'</pre>':''}</div>`;
  });
- $('answer').innerHTML=h;
+ $('answer').innerHTML=h;side();
  if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
@@ -189,7 +245,7 @@ async function upload(e){
  $('go').disabled=true;$('go').textContent='Analysing…';
  try{
   const r=await api('/api/upload',body);
-  showUploaded(r);await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
+  showUploaded(r);side();await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
  }catch(x){err(x.message)}finally{$('go').disabled=false;syncForm()}
 }
 function showUploaded(r){
@@ -243,6 +299,29 @@ async function addCountry(){
  }catch(e){msg.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
 }
 
+/* ---------- keep it trusted: one-click checks, background log, simulated signals ---------- */
+const BTN={conflict:[['keep','Mine is right'],['other','The other one is right']],confirm:[['yes','Still correct'],['no','Outdated']],handover:[['accept','I’ll own it'],['decline','Not me']],draft:[['publish','Publish'],['discard','Discard']]};
+const KIND={conflict:'Conflict',confirm:'Still correct?',handover:'Needs an owner',draft:'Your chat answer'};
+async function side(){
+ try{
+  const[checks,act]=await Promise.all([api('/api/verifications'),api('/api/activity')]);
+  $('budget').textContent=`sent only when a person’s judgement matters · max ${act.budgetPerPerson} open per person`;
+  $('inbox').innerHTML=checks.length?'<div class="grid">'+checks.map(v=>`<div class="check"><div class="for">For ${esc(v.person)} · ${KIND[v.kind]}${v.payload.countries?' · '+esc(v.payload.countries.join(', ')):''}</div><p>${esc(v.reason)}</p><div class="btns">${BTN[v.kind].map(([r,l],i)=>`<button type="button" class="${i?'ghost':'btn'}" onclick="answerCheck(${v.id},'${r}')">${l}</button>`).join('')}</div></div>`).join('')+'</div>'
+   :'<div class="empty">Nothing needs anyone right now. That is the point.</div>';
+  const w=act.watching;
+  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?(act.ai.provider||'Gemini'):'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set GEMINI_API_KEY for Gemini)')]]
+   .map(([b,t])=>`<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
+  $('log').innerHTML=act.items.map(i=>`<li><span class="k">${esc(i.kind.replace('_',' '))}</span><span>${esc(i.message)}</span></li>`).join('');
+ }catch(e){$('inbox').innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+}
+async function refreshAnswer(){if(S.qid){S.noScroll=true;await showAnswer(S.qid);S.noScroll=false}else side()}
+async function answerCheck(id,response){try{await api('/api/verifications/'+id,{response});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
+async function sendReply(person){
+ try{await api('/api/expert-replies',{questionId:S.d.questionId,country:S.d.country,person,text:$('reply').value});S.compose=null;await refreshAnswer();$('checks').scrollIntoView({behavior:'smooth',block:'start'})}catch(e){alert(e.message)}
+}
+async function hrEvent(){try{await api('/api/events/role-change',{person:'Nadia Peeters',newRole:'Finance Ops'});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
+async function teamsMsg(){try{await api('/api/ingest',{title:'Teams: #payroll-help (NL thread)',type:'Chat',source:'Teams',body:'Q: How does the leaver bonus work for Dutch employees?\nA: In the Netherlands the leaver bonus is pro rata by days worked.'});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
+
 /* ---------- init + events ---------- */
 async function init(){
  try{
@@ -251,7 +330,7 @@ async function init(){
   $('sugg').innerHTML='<span class="mute" style="font-size:.85rem">Try:</span> '+q.questions.map(x=>`<button type="button" class="chip" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('');
   $('foot').textContent+=' Today’s date in the demo: '+q.now+'.';
   try{$('email').value=localStorage.getItem('tl-email')||''}catch{}
-  syncForm();await loadDocs();await loadLists();
+  syncForm();await loadDocs();await loadLists();side();
  }catch(e){$('results').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
 }
 document.addEventListener('click',async e=>{
