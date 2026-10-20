@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trust Lens – from "I found something" to "I can rely on it"</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fbfaf7;--ink:#17233a;--mute:#5c687c;--card:#fff;--line:#dfe2e8;--acc:#1b5fd6;--ok:#178a54;--mid:#c98a10;--bad:#c2372f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1624;--ink:#e9edf5;--mute:#93a0b5;--card:#182238;--line:#2a3855;--acc:#6b9bff;--ok:#44c48a;--mid:#f0b43c;--bad:#ff7d72}}
+:root[data-theme="dark"]{--bg:#0f1624;--ink:#e9edf5;--mute:#93a0b5;--card:#182238;--line:#2a3855;--acc:#6b9bff;--ok:#44c48a;--mid:#f0b43c;--bad:#ff7d72}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 'Instrument Sans',system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 20px 56px}
+h1{font-size:clamp(1.9rem,5vw,3rem);line-height:1.08;margin:0 0 10px;font-weight:700;letter-spacing:-.02em}
+.lead{color:var(--mute);max-width:62ch;margin:0 0 24px}
+.ctl{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:20px}
+.ctl label{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:.9rem;flex:1 1 260px}
+select{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+select:focus-visible,button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.verdict{border:2px solid var(--c);border-radius:16px;padding:20px;background:var(--card)}
+.verdict .v{font-size:1.5rem;font-weight:700;color:var(--c)}
+.ans{font-size:1.25rem;margin:6px 0 12px}
+.banner{border-left:5px solid var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent);padding:10px 14px;border-radius:8px;margin:12px 0}
+.next{border-left:5px solid var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent);padding:10px 14px;border-radius:8px;margin:12px 0}
+h2{font-size:1.05rem;margin:26px 0 10px}
+.src{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+.src.out{opacity:.6}
+.top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.sc{font-weight:700}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:10px 0 6px}
+.seg button{font:inherit;font-size:.8rem;text-align:left;border:0;border-radius:6px;padding:6px 8px;background:var(--line);color:var(--ink);cursor:pointer;position:relative;overflow:hidden}
+.seg button span{position:relative}
+.seg button i{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--ok) 45%,transparent)}
+.exp{font-size:.88rem;color:var(--mute);min-height:1.4em}
+.tag{font-size:.78rem;border:1px solid var(--line);border-radius:99px;padding:1px 8px;color:var(--mute)}
+@media(max-width:600px){.seg{grid-template-columns:repeat(2,1fr)}}
+button.doc{font:inherit;font-size:.82rem;margin-top:8px;background:none;border:1px solid var(--line);color:var(--acc);border-radius:8px;padding:4px 10px;cursor:pointer}
+pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0 0;max-height:280px;overflow:auto}
+footer{margin-top:24px;color:var(--mute);font-size:.85rem}
+</style></head><body><main>
+<h1>Don’t just find the answer. See why you can rely on it.</h1>
+<p class="lead">Ask a payroll question. Trust Lens ranks every source by how fresh it is, who owns it, whether it applies to this country, and whether others agree. It then shows conflicts and who to ask when documents are not enough.</p>
+<div class="ctl">
+ <label>Question<select id="q"></select></label>
+ <label>Country of the employee<select id="c"><option value="BE">Belgium</option><option value="NL">Netherlands</option><option value="DE">Germany</option></select></label>
+</div>
+<div id="out" aria-live="polite"></div>
+<footer id="foot">Proof of concept with fictional documents and people.</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const COLOR={rely:'var(--ok)',check:'var(--mid)',hold:'var(--bad)'};
+const SEGS=[['fresh','Fresh',30],['owner','Owner',20],['applies','Applies',30],['agreed','Agreed',20]];
+let open={},docs={},shown={};
+async function toggle(f){if(!docs[f])docs[f]=(await api('/api/documents/'+encodeURIComponent(f))).body;shown[f]=!shown[f];draw()}
+async function api(path,body){
+ const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);
+ const j=await r.json(); if(!r.ok) throw new Error(j.error||r.statusText); return j;
+}
+async function init(){
+ try{
+  const d=await api('/api/questions');
+  $('q').innerHTML=d.questions.map(x=>`<option value="${esc(x.id)}">${esc(x.text)}</option>`).join('');
+  $('foot').textContent+=` Today’s date in the demo: ${d.now}.`;
+  draw();
+ }catch(e){$('out').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
+}
+async function draw(){
+ let d;
+ try{d=await api('/api/answer',{questionId:$('q').value,country:$('c').value})}
+ catch(e){$('out').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
+ let h=`<div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
+ if(d.basedOn)h+=`<div>Based on <strong>${esc(d.basedOn.title)}</strong>, trust score <strong>${d.basedOn.score}/100</strong>.</div>`;
+ if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. The first has the stronger evidence, yet someone should confirm.</div>`;
+ if(d.expert)h+=`<div class="next"><strong>Who can help:</strong> ${esc(d.expert)}</div>`;
+ h+='</div><h2>Sources, ranked. Tap a bar to see why.</h2>';
+ d.sources.forEach((s,i)=>{
+  const id=d.questionId+i+d.country,sel=open[id]||'applies',r=s.score;
+  const seg=SEGS.map(([k,l,m])=>`<button onclick="op('${id}','${k}')" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
+  h+=`<div class="src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div style="color:var(--mute)">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button class="doc" onclick="toggle('${s.file}')">${shown[s.file]?'Hide':'Open'} source file (${s.file})</button>${shown[s.file]?'<pre class="file">'+esc(docs[s.file])+'</pre>':''}</div>`});
+ $('out').innerHTML=h;
+}
+function op(id,k){open[id]=k;draw()}
+$('q').onchange=$('c').onchange=draw;init();
+</script></body></html>

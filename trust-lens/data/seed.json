@@ -1,0 +1,184 @@
+{
+  "now": "2026-09",
+  "questions": [
+    {
+      "id": "leaver-bonus",
+      "text": "How is a leaver’s year-end bonus calculated?",
+      "expert": "Nadia Peeters, Payroll BE"
+    },
+    {
+      "id": "new-hire-deadline",
+      "text": "Which deadline applies for reporting a new hire?",
+      "expert": "Lea Martin, Compliance"
+    },
+    {
+      "id": "retro-correction",
+      "text": "Who can approve a retroactive payslip correction?",
+      "expert": "Sara Janssens, Finance Ops"
+    }
+  ],
+  "documents": [
+    {
+      "file": "acme-client-contract.md",
+      "title": "Acme client contract",
+      "type": "Contract",
+      "date": "2026-01",
+      "owner": "Tom de Vries (Acme account)",
+      "countries": [
+        "BE",
+        "NL"
+      ],
+      "topic": "leaver-bonus",
+      "claim": "A",
+      "answer": "Pro rata by months worked",
+      "body": "# Master Services Agreement - Acme Logistics NV\nEffective 1 January 2026. Account owner: Tom de Vries.\n\n## Schedule 3: Payroll processing rules (BE and NL employees)\n3.4 Year-end bonus for employees who leave before 31 December is paid **pro rata by months worked**. Northwind will apply this rule to all Acme employees in Belgium and the Netherlands."
+    },
+    {
+      "file": "approval-matrix.md",
+      "title": "Approval matrix",
+      "type": "Policy",
+      "date": "2025-12",
+      "owner": "Sara Janssens (Finance Ops)",
+      "countries": [
+        "BE",
+        "NL",
+        "DE"
+      ],
+      "topic": "retro-correction",
+      "claim": "A",
+      "answer": "Team lead and finance",
+      "body": "# Payroll approval matrix (all countries)\nOwner: Sara Janssens, Finance Ops. Version December 2025.\n\n| Action | Approver(s) |\n|---|---|\n| New joiner payslip | Payroll specialist |\n| **Retroactive payslip correction** | **Team lead and finance** |\n| Bank detail change | Payroll specialist + employee confirmation |"
+    },
+    {
+      "file": "de-handbook.md",
+      "title": "DE Handbook",
+      "type": "Policy",
+      "date": "2026-01",
+      "owner": "Jan Weber (Compliance DE)",
+      "countries": [
+        "DE"
+      ],
+      "topic": "new-hire-deadline",
+      "claim": "C",
+      "answer": "On the first working day",
+      "body": "# Northwind HR Handbook - Germany\nOwner: Jan Weber, Compliance DE. Edition January 2026.\n\n## 2.1 Reporting new hires\nNew employees must be registered with the social insurance carrier **on the first working day**. Responsibility: HR Operations DE."
+    },
+    {
+      "file": "holiday-policy.md",
+      "title": "Holiday policy",
+      "type": "Policy",
+      "date": "2026-02",
+      "owner": "HR Shared Services",
+      "countries": [
+        "BE",
+        "NL",
+        "DE"
+      ],
+      "topic": null,
+      "claim": null,
+      "answer": null,
+      "body": "# Holiday policy\nNot related to payroll questions in the demo. Included to show that the ingestion step ignores documents that are not linked to a question topic."
+    },
+    {
+      "file": "legal-update-email.md",
+      "title": "Email: Legal update",
+      "type": "Email",
+      "date": "2024-02",
+      "owner": null,
+      "countries": [
+        "BE"
+      ],
+      "topic": "new-hire-deadline",
+      "claim": "B",
+      "answer": "Within 7 days",
+      "body": "From: legal-notices@northwind.example\nTo: hr-all@northwind.example\nDate: 14 Feb 2024\nSubject: FW: FW: Legal update on new hire reporting\n\nHi all, forwarding the note below for info.\n\n> We understand reporting of new hires can now be done within 7 days of the start date.\n> Please adapt your processes accordingly.\n\n(Original sender unclear, forwarded several times.)"
+    },
+    {
+      "file": "nl-wiki-bonus-rules.md",
+      "title": "NL Wiki: Bonus rules",
+      "type": "Wiki",
+      "date": "2023-05",
+      "owner": null,
+      "countries": [
+        "NL"
+      ],
+      "topic": "leaver-bonus",
+      "claim": "C",
+      "answer": "Pro rata by days worked",
+      "body": "# Bonus rules (Netherlands)\n_Last edited May 2023. Author: unknown (page migrated from the old intranet)._\n\nWhen someone leaves, their bonus is worked out **pro rata by days worked** in the year. Use the day counter in the old payroll tool.\n\nTODO: check if this is still correct after the tool migration."
+    },
+    {
+      "file": "onboarding-checklist.md",
+      "title": "Onboarding checklist",
+      "type": "Policy",
+      "date": "2026-06",
+      "owner": "Lea Martin (Compliance)",
+      "countries": [
+        "BE"
+      ],
+      "topic": "new-hire-deadline",
+      "claim": "A",
+      "answer": "Before the first working day",
+      "body": "# New employee onboarding checklist - Belgium\nOwner: Lea Martin, Compliance. Updated June 2026.\n\n1. Collect signed contract and ID copy.\n2. **Report the new hire to the social security authority before the first working day** (Dimona declaration). Late reporting is fined.\n3. Create payroll record and assign bonus plan.\n4. Order equipment and send welcome mail."
+    },
+    {
+      "file": "payroll-manual-v7.md",
+      "title": "Payroll Manual v7",
+      "type": "Policy",
+      "date": "2026-03",
+      "owner": "Nadia Peeters (Payroll BE)",
+      "countries": [
+        "BE"
+      ],
+      "topic": "leaver-bonus",
+      "claim": "A",
+      "answer": "Pro rata by months worked",
+      "body": "# Northwind Payroll Manual, Belgium - Version 7\nApproved by Payroll BE, March 2026. Supersedes v6.\n\n## 4. Year-end bonus\n### 4.3 Employees who leave during the year\nThe year-end bonus of a leaver is calculated **pro rata by months worked** in the calendar year. A started month counts as a full month when the employee worked at least 15 calendar days in it.\n\nExample: an employee leaving on 31 August receives 8/12 of the bonus.\n\nThere is no exception for leavers who depart after 1 October. Questions about this section go to Payroll BE."
+    },
+    {
+      "file": "teams-ops.md",
+      "title": "Teams: #ops",
+      "type": "Chat",
+      "date": "2026-08",
+      "owner": null,
+      "countries": [
+        "BE"
+      ],
+      "topic": "retro-correction",
+      "claim": "B",
+      "answer": "Team lead only",
+      "body": "Export of Teams channel #ops, August 2026\n\n[19 Aug 2026, 14:05] Dries K.: who needs to sign off on a retro correction? it's only 40 euro\n[19 Aug 2026, 14:09] Eva L.: team lead only is fine for small amounts imo\n[19 Aug 2026, 14:10] Dries K.: ok will ask my team lead then"
+    },
+    {
+      "file": "teams-payroll-help.md",
+      "title": "Teams: #payroll-help",
+      "type": "Chat",
+      "date": "2025-11",
+      "owner": null,
+      "countries": [
+        "BE",
+        "NL"
+      ],
+      "topic": "leaver-bonus",
+      "claim": "B",
+      "answer": "Full bonus if the employee left after 1 October",
+      "body": "Export of Teams channel #payroll-help, November 2025\n\n[12 Nov 2025, 09:14] Marc V.: quick one, employee left 20 Oct, do they still get the whole year-end bonus?\n[12 Nov 2025, 09:31] Priya S.: afaik if they left after 1 October it's the full bonus, that's how we did it last year\n[12 Nov 2025, 09:32] Marc V.: great, thx\n[12 Nov 2025, 10:02] Priya S.: not 100% sure it's written anywhere though"
+    },
+    {
+      "file": "wiki-corrections.md",
+      "title": "Wiki: corrections",
+      "type": "Wiki",
+      "date": "2022-09",
+      "owner": null,
+      "countries": [
+        "BE",
+        "NL",
+        "DE"
+      ],
+      "topic": "retro-correction",
+      "claim": "A",
+      "answer": "Team lead and finance",
+      "body": "# Payslip corrections\n_Edited September 2022, author unknown._\n\nRetroactive corrections need approval from the **team lead and finance**. Send the request through the ticket form."
+    }
+  ]
+}
