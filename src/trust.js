@@ -28,8 +28,8 @@ function explain(s, r, country) {
   };
 }
 
-function answer(question, country, now) {
-  if (!COUNTRIES.includes(country)) throw new Error(`Unknown country "${country}"`);
+function answer(question, country, now, validCountries = COUNTRIES) {
+  if (!validCountries.includes(country)) throw new Error(`Unknown country "${country}"`);
   const sources = question.sources
     .map(s => {
       const score = scoreSource(s, country, question.sources, now);

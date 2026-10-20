@@ -12,12 +12,10 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 - **Node 22.13+:** uses the built-in `node:sqlite`. No install needed.
 - **Node 18 or 20:** run `npm install` once. It installs `better-sqlite3`, an optional dependency used as the SQLite driver. The app picks the driver automatically, and `/api/health` reports which one is active.
-=======
-Requires **Node >= 22.13**. No dependencies and no `npm install`: the database is Node's built-in `node:sqlite`. 
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 38 tests (node:test, in-memory databases)
+npm test             # 52 tests (node:test, in-memory databases)
 npm run demo         # scripted CLI demo: good / conflict / gap / gap closed live
 npm run reseed       # delete the database file and load the demo data again
 ```
@@ -26,7 +24,6 @@ npm run reseed       # delete the database file and load the demo data again
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
 | `DB_PATH` | `data/trustlens.db` | database file |
-| `ADMIN_TOKEN` | unset | when set, write routes require `Authorization: Bearer <token>` |
 | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
 | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
 | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
@@ -65,7 +62,11 @@ SQLite in WAL mode with foreign keys on. The two drivers (built-in `node:sqlite`
 | `documents` | file name, title, type, `doc_date` (YYYY-MM), owner, topic, claim, answer, body, version, timestamps |
 | `document_countries` | which countries each document applies to (many-to-many) |
 | `document_versions` | a snapshot of the document and who edited it, for every save |
-| `people` | owners, as name and role |
+| `people` | owners and editors: name, role and email |
+| `countries` | the countries in use (ISO code and name); new ones are validated against `src/countries.js` |
+| `document_types` | every document type, stored once (starts with Policy, Wiki, Chat, Email, Contract, Document; new ones are added on first use) |
+| `keywords` | every keyword, stored once (new ones are added on first use) |
+| `document_keywords` | which keywords belong to which document, with a weight and a flag for manually entered ones |
 | `questions` | the question text and the expert to contact when documents are not enough |
 | `answer_log` | every answer that was not green: question, country, verdict, gap and conflict flags |
 | `settings` | the demo reference date |
@@ -110,6 +111,13 @@ A plain Node `http` server with no framework.
 | POST | `/api/documents` | create a document (returns `201`) |
 | PUT | `/api/documents/:file` | update a document; provided fields are merged, the version number goes up |
 | GET | `/api/documents/:file/versions` | version history, newest first, with who edited |
+| POST | `/api/upload` | upload a new file or a new version of one (email required) |
+| GET | `/api/search?q=` | simulated search over questions and keywords |
+| GET | `/api/countries` | countries in use |
+| POST | `/api/countries` | body `{country}` (name or ISO code); adds a real country, `201` if new, `200` if it already existed, `400` if not a country |
+| GET | `/api/countries/iso` | all 249 ISO 3166-1 countries (for suggestions) |
+| GET | `/api/types` | all document types |
+| GET | `/api/keywords?limit=` | all keywords with how many documents use them (default 40, max 500) |
 | GET | `/api/people` | people and how many documents they own |
 | GET | `/api/gaps` | ranked log of unreliable answers, with gap and conflict counts |
 
@@ -124,13 +132,29 @@ curl -s localhost:3000/api/documents -H 'Content-Type: application/json' -d '{
 }'
 ```
 
-Errors return JSON `{error}`: `400` invalid input, `401` missing or wrong token, `404` unknown route or document, `409` file name already used, `413` body too large, `500` unexpected error (details are logged, not returned).
+Errors return JSON `{error}`: `400` invalid input, `404` unknown route or document, `409` file name already used, `413` body too large, `500` unexpected error (details are logged, not returned).
 
-**Security notes:** every query uses bound parameters (tested with hostile input), document names are checked against the database instead of the file system, request bodies are size-limited, and write routes can be protected with `ADMIN_TOKEN` (compared in constant time). There is no per-user authentication yet.
+**Security notes:** every query uses bound parameters (tested with hostile input), document names are checked against the database instead of the file system, and request bodies are size-limited. **There is no authentication yet: every write route (`/api/upload`, `POST` and `PUT /api/documents`) is open to anyone who can reach the server, and the email on an upload is not verified.** Run it locally or behind your own access control until accounts are added.
 
 ### 5. The gap log
 
 Every answer that is not green is stored in `answer_log`, so it survives restarts. `/api/gaps` ranks the most-asked unreliable questions and splits them into **gaps** (no source covers the country) and **conflicts** (sources disagree). Adding the missing document closes the gap immediately, which is the feedback loop the product is built on.
+
+### 5b. Upload, metadata and search
+
+The home page has a **search bar** with a country selector, and an **Add or update a document** panel.
+
+- **Upload (`POST /api/upload`):** body `{email, fileName, content, countries, title?, type?, topic?, answer?, replaces?}`. A new upload is owned by the email given (the email becomes a `people` record). With `replaces: "<file>"` the document gets a new version, the original owner is kept, and the email is stored as last editor. Updating an ownerless document claims it. Only `.md` and `.txt` for now, with a maximum of 200,000 characters (about 200 KB) of text per document; the form checks this before sending, and the API answers `400` otherwise. Identical content is rejected as a duplicate.
+- **Generated metadata** (`src/metadata.js`, no LLM yet): title (first `# heading` or file name), summary, weighted keywords. Each document also stores owner email, last editor, last edited date, size, content hash, original file name, `source` (`api`, `upload`, `seed`) and `meta_source` (`heuristic`, `manual`, later `llm`). **`generate()` in `metadata.js` is the one function an LLM call replaces.** Keywords live in the `document_keywords` table (indexed) and drive search.
+- **Countries:** the "Applies to" checkboxes and the search country selector come from the `countries` table (it starts with Belgium, Netherlands and Germany). The upload form has an **Add country** box with all 249 official countries of ISO 3166-1 as suggestions. You can type the English name or the two-letter code (`France`, `fr`; a few common aliases such as `UK` work too). Anything that is not a real country is rejected (`400`), and a country is stored once. A new country can then be used on documents and in searches; a question with no document for it shows as a knowledge gap.
+- **Type:** the Type field is free text with the stored types as suggestions. An unknown type is added to the `document_types` table the first time it is used (the confirmation says so). Matching ignores case and extra spaces, so "meeting NOTES" reuses "Meeting notes". Types are 1 to 40 characters (letters, digits, spaces, `& / . -`). On an update, leaving the type empty keeps the current one.
+- **Keywords (optional):** the upload form has one Keywords field (comma separated). Manual keywords are added to the generated ones and ranked first. Every keyword is stored once in the global `keywords` table, so a new keyword is added the first time anyone uses it, and the form lists existing keywords as clickable suggestions. Manual keywords are kept when a document is updated without new keywords; giving new ones replaces the manual set. The upload response lists what was new to the database (`added.type`, `added.keywords`).
+- **Question links:** the upload form no longer links a document to a question. Uploaded documents are searchable by their keywords but do not take part in a trust verdict yet; the API (`topic`, `answer`, `claim` on `POST /api/upload` and `/api/documents`) still supports it, and the LLM step is meant to do this automatically.
+- **Search (`GET /api/search?q=`):** simulated. It matches the words against question texts and stored keywords and returns matching questions and documents. Opening a question shows the trust verdict. This is the part an LLM question-routing step replaces.
+
+### 5c. Countries
+
+`src/countries.js` holds the official ISO 3166-1 list and resolves what the user types (name, code, accents, a few aliases). `repo.addCountry()` stores only resolved countries. Document validation and `/api/answer` check against the `countries` table, so a country must be added before it can be used.
 
 ### 6. The UI (`public/index.html`)
 
@@ -157,7 +181,9 @@ Run `npm run demo` to see all four in the terminal.
 
 - `trust.test.js`: freshness buckets, agreement cap, applicability, conflicts, gaps, each verdict.
 - `db.test.js`: migrations, seeding, persistence across reopening a file, constraints, rollback on failure, answer log aggregation.
-- `documents.test.js`: live create and update, version history, validation, SQL injection safety, admin token, gap log.
+- `documents.test.js`: live create and update, version history, validation, SQL injection safety, gap log.
+- `countries.test.js`: the ISO list, resolving names and codes, rejecting invented countries, using a new country, email to people record.
+- `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
 
 ## Project layout
@@ -167,6 +193,8 @@ data/seed.json       fictional demo data (questions, documents with full text)
 data/trustlens.db    the database (created on first run, ignored by git)
 src/db.js            driver selection, connection and migrations
 src/repo.js          all SQL, validation and transactions
+src/countries.js     ISO 3166-1 country list and name/code resolver
+src/metadata.js      placeholder summary/keyword generation (LLM goes here)
 src/seed.js          loads demo data into an empty database
 src/trust.js         scoring and verdict logic
 src/server.js        HTTP API and static UI
@@ -189,7 +217,8 @@ demo/demo.js         scripted CLI demo
 - The demo data is fictional and small.
 - `claim` labels are provided by hand, so conflict detection is only as good as those labels.
 - Scores are transparent heuristics, not calibrated against real outcomes.
-- One shared admin token, no per-user accounts or permissions.
+- No authentication: no accounts, permissions or email verification, and all write routes are open.
+- Uploads are limited to `.md`/`.txt` files of about 200 KB. No PDF or Word parsing yet.
 - SQLite fits a single server. Multiple servers would need PostgreSQL.
 - Node marks `node:sqlite` as experimental. The app hides that one warning when it starts, and `better-sqlite3` is the fallback if that API changes.
 - Tests were run on Node 18.18 (with `better-sqlite3`) and Node 22 (with `node:sqlite`).

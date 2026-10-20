@@ -20,7 +20,7 @@ test('migrations run once and set the schema version', () => {
   const db = openDb(':memory:');
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, MIGRATIONS.length);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
-  for (const t of ['documents', 'people', 'questions', 'document_countries', 'document_versions', 'answer_log', 'settings']) {
+  for (const t of ['documents', 'people', 'questions', 'document_countries', 'document_versions', 'answer_log', 'settings', 'countries', 'document_types', 'keywords', 'document_keywords']) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   db.close();

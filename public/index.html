@@ -11,75 +11,273 @@ html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 'Instrument Sans',system-ui,sans-serif}
 main{max-width:920px;margin:0 auto;padding:32px 20px 56px}
 h1{font-size:clamp(1.9rem,5vw,3rem);line-height:1.08;margin:0 0 10px;font-weight:700;letter-spacing:-.02em}
-.lead{color:var(--mute);max-width:62ch;margin:0 0 24px}
-.ctl{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:20px}
-.ctl label{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:.9rem;flex:1 1 260px}
-select{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
-select:focus-visible,button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+h2{font-size:1.05rem;margin:26px 0 10px}
+.lead{color:var(--mute);max-width:62ch;margin:0 0 22px}
+.mute{color:var(--mute)}
+input,select,textarea{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);width:100%}
+input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 18px;font-weight:600}
+.btn[disabled]{opacity:.6;cursor:wait}
+.search{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+.search .q{flex:1 1 320px}.search .c{flex:0 0 150px;width:150px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.chip{font-size:.85rem;border:1px solid var(--line);border-radius:99px;padding:3px 11px;background:var(--card);color:var(--ink)}
+button.chip:hover{border-color:var(--acc);color:var(--acc)}
+.kw{font-size:.78rem;border-radius:99px;padding:1px 8px;background:color-mix(in srgb,var(--acc) 12%,transparent);color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+.card h3{margin:0 0 6px;font-size:1.05rem}
+.qbtn{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px;color:var(--ink);font-weight:600}
+.qbtn:hover{border-color:var(--acc)}
 .verdict{border:2px solid var(--c);border-radius:16px;padding:20px;background:var(--card)}
 .verdict .v{font-size:1.5rem;font-weight:700;color:var(--c)}
 .ans{font-size:1.25rem;margin:6px 0 12px}
 .banner{border-left:5px solid var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent);padding:10px 14px;border-radius:8px;margin:12px 0}
 .next{border-left:5px solid var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent);padding:10px 14px;border-radius:8px;margin:12px 0}
-h2{font-size:1.05rem;margin:26px 0 10px}
-.src{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+.okmsg{border-left:5px solid var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent);padding:10px 14px;border-radius:8px;margin:12px 0}
 .src.out{opacity:.6}
 .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .sc{font-weight:700}
 .seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:10px 0 6px}
-.seg button{font:inherit;font-size:.8rem;text-align:left;border:0;border-radius:6px;padding:6px 8px;background:var(--line);color:var(--ink);cursor:pointer;position:relative;overflow:hidden}
+.seg button{font-size:.8rem;text-align:left;border:0;border-radius:6px;padding:6px 8px;background:var(--line);color:var(--ink);position:relative;overflow:hidden}
 .seg button span{position:relative}
 .seg button i{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--ok) 45%,transparent)}
 .exp{font-size:.88rem;color:var(--mute);min-height:1.4em}
 .tag{font-size:.78rem;border:1px solid var(--line);border-radius:99px;padding:1px 8px;color:var(--mute)}
-@media(max-width:600px){.seg{grid-template-columns:repeat(2,1fr)}}
-button.doc{font:inherit;font-size:.82rem;margin-top:8px;background:none;border:1px solid var(--line);color:var(--acc);border-radius:8px;padding:4px 10px;cursor:pointer}
+button.link{background:none;border:1px solid var(--line);color:var(--acc);border-radius:8px;padding:4px 10px;font-size:.82rem;margin-top:8px}
 pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0 0;max-height:280px;overflow:auto}
-footer{margin-top:24px;color:var(--mute);font-size:.85rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:.9rem;margin-bottom:12px}
+.field small{font-weight:400;color:var(--mute)}
+.row{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px}
+.row label{font-weight:400;display:flex;gap:6px;align-items:center}
+.row input{width:auto}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:18px;text-align:center;color:var(--mute);margin-bottom:12px}
+.drop.on{border-color:var(--acc);color:var(--acc)}
+.meta{display:grid;grid-template-columns:130px 1fr;gap:4px 12px;font-size:.92rem;margin:10px 0}
+.meta dt{color:var(--mute)}.meta dd{margin:0}
+details>summary{cursor:pointer;font-weight:600;padding:6px 0}
+@media(max-width:600px){.seg{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.search .c{flex:1 1 100%;width:100%}.meta{grid-template-columns:1fr}}
+footer{margin-top:28px;color:var(--mute);font-size:.85rem}
 </style></head><body><main>
 <h1>Don’t just find the answer. See why you can rely on it.</h1>
-<p class="lead">Ask a payroll question. Trust Lens ranks every source by how fresh it is, who owns it, whether it applies to this country, and whether others agree. It then shows conflicts and who to ask when documents are not enough.</p>
-<div class="ctl">
- <label>Question<select id="q"></select></label>
- <label>Country of the employee<select id="c"><option value="BE">Belgium</option><option value="NL">Netherlands</option><option value="DE">Germany</option></select></label>
-</div>
-<div id="out" aria-live="polite"></div>
-<footer id="foot">Proof of concept with fictional documents and people.</footer>
+<p class="lead">Ask a question. Trust Lens ranks every source by how fresh it is, who owns it, whether it applies to this country, and whether others agree. It shows conflicts and who to ask when documents are not enough.</p>
+
+<form class="search" id="sf" role="search">
+ <input class="q" id="q" type="search" placeholder="Ask a question, e.g. how is a leaver’s bonus calculated?" aria-label="Search" autocomplete="off">
+ <select class="c" id="c" aria-label="Country of the employee"></select>
+ <button class="btn" type="submit">Search</button>
+</form>
+<div class="chips" id="sugg" aria-label="Suggested questions"></div>
+<div id="results" aria-live="polite"></div>
+<div id="answer" aria-live="polite"></div>
+
+<h2 id="upl">Add or update a document</h2>
+<form class="card" id="uf" novalidate>
+ <div class="drop" id="drop"><input type="file" id="file" accept=".md,.markdown,.txt" style="display:none"><button type="button" class="link" id="pick">Choose a file</button> or drop it here (.md or .txt, max 200 KB)<div id="fname" class="mute"></div></div>
+ <div class="grid">
+  <label class="field">Your email <small>stored as the owner (new) or the editor (update)</small><input id="email" type="email" autocomplete="email" placeholder="you@company.com" required></label>
+  <div class="field">What are you doing?
+   <div class="row" style="margin:6px 0 0"><label><input type="radio" name="mode" value="new" checked> New document</label><label><input type="radio" name="mode" value="update"> Update existing</label></div>
+  </div>
+ </div>
+ <label class="field" id="repl" hidden>Document to update<select id="replaces"></select></label>
+ <div class="grid">
+  <label class="field">Title <small>optional, taken from the file otherwise</small><input id="title" maxlength="200"></label>
+  <label class="field">Type <small>pick one or type a new one, it is added to the database</small><input id="type" list="typelist" maxlength="40" placeholder="Document" autocomplete="off"><datalist id="typelist"></datalist></label>
+ </div>
+ <div class="field">Applies to <small id="chint">select at least one country</small><div class="row" id="countries" style="margin:6px 0 0"></div>
+  <div class="row" style="margin:0;gap:8px"><input id="cadd" list="isolist" maxlength="60" placeholder="Add another country, e.g. France" autocomplete="off" style="max-width:300px"><datalist id="isolist"></datalist><button type="button" class="link" id="cbtn" style="margin-top:0">Add country</button></div>
+  <div id="cmsg" aria-live="polite"></div></div>
+ <label class="field">Keywords <small>optional, separated by commas. New keywords are added to the database; keywords are also generated automatically.</small><input id="kwin" maxlength="400" placeholder="e.g. holiday, carry-over, leave" autocomplete="off"></label>
+ <div class="chips" id="kwsugg" aria-label="Existing keywords"></div>
+ <button class="btn" id="go" type="submit">Upload</button>
+ <div id="uerr" role="alert"></div>
+</form>
+<div id="uresult" aria-live="polite"></div>
+
+<details id="lib"><summary>Library: all documents</summary><div id="libbody"></div></details>
+<footer id="foot">Proof of concept with fictional documents and people. Summary and keywords are generated by a simple placeholder for now.</footer>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const COLOR={rely:'var(--ok)',check:'var(--mid)',hold:'var(--bad)'};
 const SEGS=[['fresh','Fresh',30],['owner','Owner',20],['applies','Applies',30],['agreed','Agreed',20]];
-let open={},docs={},shown={};
-async function toggle(f){if(!docs[f])docs[f]=(await api('/api/documents/'+encodeURIComponent(f))).body;shown[f]=!shown[f];draw()}
+const S={questions:[],docs:[],file:null,qid:null,open:{},texts:{},shown:{}};
 async function api(path,body){
- const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);
- const j=await r.json(); if(!r.ok) throw new Error(j.error||r.statusText); return j;
+ const h={};if(body)h['Content-Type']='application/json';
+ const r=await fetch(path,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined});
+ let j={};try{j=await r.json()}catch{}
+ if(!r.ok)throw new Error(j.error||('Request failed ('+r.status+')'));return j;
 }
-async function init(){
+const kws=a=>(a||[]).map(k=>`<span class="kw">${esc(k)}</span>`).join(' ');
+
+/* ---------- search ---------- */
+function docCard(d){
+ return `<div class="card"><div class="top"><h3>${esc(d.title)}</h3><span class="tag">${esc(d.type)}</span></div>
+ <div class="mute">${esc(d.summary||'No summary yet.')}</div><div style="margin:8px 0">${kws(d.keywords)}</div>
+ <div class="mute" style="font-size:.85rem">${d.owner?'Owner: '+esc(d.owner):'No owner'} · updated ${esc(d.date)} · applies to ${esc(d.countries.join(', '))}</div>
+ <button type="button" class="link" data-open="${esc(d.file)}">${S.shown[d.file]?'Hide':'Open'} source file</button>${S.shown[d.file]?'<pre class="file">'+esc(S.texts[d.file])+'</pre>':''}</div>`;
+}
+async function search(q){
+ const box=$('results');$('answer').innerHTML='';S.qid=null;
  try{
-  const d=await api('/api/questions');
-  $('q').innerHTML=d.questions.map(x=>`<option value="${esc(x.id)}">${esc(x.text)}</option>`).join('');
-  $('foot').textContent+=` Today’s date in the demo: ${d.now}.`;
-  draw();
- }catch(e){$('out').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
+  const r=await api('/api/search?q='+encodeURIComponent(q));
+  S.last=r;
+  let h='';
+  if(r.questions.length){h+='<h2>Questions we can answer</h2>'+r.questions.map(x=>`<button type="button" class="qbtn" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('')}
+  if(r.documents.length){h+='<h2>Matching documents</h2>'+r.documents.map(docCard).join('')}
+  if(!h)h='<div class="banner"><strong>Nothing found.</strong> No document matches these words. That is a knowledge gap: try other words, or add a document below.</div>';
+  box.innerHTML=h;
+  const[a,b]=r.questions;if(a&&(!b||a.score>=b.score*1.5))showAnswer(a.id); // open automatically when one question clearly leads
+ }catch(e){box.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
 }
-async function draw(){
- let d;
- try{d=await api('/api/answer',{questionId:$('q').value,country:$('c').value})}
- catch(e){$('out').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
- let h=`<div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
+function rerenderDocs(){if(S.last)search($('q').value.trim())}
+
+/* ---------- verdict ---------- */
+async function showAnswer(id){
+ S.qid=id;let d;
+ try{d=await api('/api/answer',{questionId:id,country:$('c').value})}
+ catch(e){$('answer').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
+ let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2><div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
  if(d.basedOn)h+=`<div>Based on <strong>${esc(d.basedOn.title)}</strong>, trust score <strong>${d.basedOn.score}/100</strong>.</div>`;
  if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. The first has the stronger evidence, yet someone should confirm.</div>`;
  if(d.expert)h+=`<div class="next"><strong>Who can help:</strong> ${esc(d.expert)}</div>`;
  h+='</div><h2>Sources, ranked. Tap a bar to see why.</h2>';
  d.sources.forEach((s,i)=>{
-  const id=d.questionId+i+d.country,sel=open[id]||'applies',r=s.score;
-  const seg=SEGS.map(([k,l,m])=>`<button onclick="op('${id}','${k}')" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
-  h+=`<div class="src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div style="color:var(--mute)">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button class="doc" onclick="toggle('${s.file}')">${shown[s.file]?'Hide':'Open'} source file (${s.file})</button>${shown[s.file]?'<pre class="file">'+esc(docs[s.file])+'</pre>':''}</div>`});
- $('out').innerHTML=h;
+  const key=d.questionId+i+d.country,sel=S.open[key]||'applies',r=s.score;
+  const seg=SEGS.map(([k,l,m])=>`<button type="button" data-bar="${esc(key)}|${k}" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
+  h+=`<div class="card src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div class="mute">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button type="button" class="link" data-open="${esc(s.file)}">${S.shown[s.file]?'Hide':'Open'} source file</button>${S.shown[s.file]?'<pre class="file">'+esc(S.texts[s.file])+'</pre>':''}</div>`;
+ });
+ $('answer').innerHTML=h;
+ if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});
 }
-function op(id,k){open[id]=k;draw()}
-$('q').onchange=$('c').onchange=draw;init();
+
+/* ---------- upload / update ---------- */
+function mode(){return document.querySelector('input[name=mode]:checked').value}
+function syncForm(){
+ const upd=mode()==='update';
+ $('repl').hidden=!upd;
+ $('go').textContent=upd?'Save new version':'Upload';
+$('type').placeholder=upd?'Keep current type':'Document';
+$('chint').textContent=upd?'leave empty to keep the current countries':'select at least one country';
+}
+function setFile(f){
+ if(!f)return;
+ if(f.size>200000){$('uerr').innerHTML='<div class="banner">File is too large (max 200 KB for now).</div>';return}
+ S.file=f;$('fname').textContent=f.name+' ('+Math.ceil(f.size/1024)+' KB)';$('uerr').innerHTML='';
+}
+async function upload(e){
+ e.preventDefault();$('uerr').innerHTML='';$('uresult').innerHTML='';
+ const err=m=>{$('uerr').innerHTML=`<div class="banner">${esc(m)}</div>`};
+ if(!S.file)return err('Choose a file first.');
+ const email=$('email').value.trim();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return err('Enter a valid email address. It is stored as the owner or editor.');
+ const upd=mode()==='update';
+ if(upd&&!$('replaces').value)return err('Choose the document to update.');
+ const countries=[...document.querySelectorAll('#countries input:checked')].map(i=>i.value);
+ if(!upd&&!countries.length)return err('Select at least one country the document applies to.');
+ let content;try{content=await S.file.text()}catch{return err('Could not read the file.')}
+ const body={email,fileName:S.file.name,content};
+ if(upd)body.replaces=$('replaces').value;
+ if(countries.length)body.countries=countries;
+ for(const k of ['title','type']){const v=$(k).value.trim();if(v)body[k]=v}
+ const kw=$('kwin').value.split(',').map(x=>x.trim()).filter(Boolean);if(kw.length)body.keywords=kw;
+ try{localStorage.setItem('tl-email',email)}catch{}
+ $('go').disabled=true;
+ try{
+  const r=await api('/api/upload',body);
+  showUploaded(r);await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
+ }catch(x){err(x.message)}finally{$('go').disabled=false}
+}
+function showUploaded(r){
+ const d=r.document;
+ const ad=r.added||{},news=[];
+ if(ad.type)news.push('new type “'+esc(ad.type)+'”');
+ if(ad.keywords&&ad.keywords.length)news.push('new keywords '+ad.keywords.map(esc).join(', '));
+ $('uresult').innerHTML=`<div class="okmsg"><strong>${r.action==='created'?'Document stored.':'New version saved (v'+d.version+').'}</strong> Metadata was generated automatically.${news.length?'<br>Added to the database: '+news.join('; ')+'.':''}</div>
+ <div class="card"><h3>${esc(d.title)}</h3><dl class="meta">
+ <dt>Owner</dt><dd>${esc(d.owner||'none')}${d.ownerEmail?' · '+esc(d.ownerEmail):''}</dd>
+ <dt>Last edited by</dt><dd>${esc(d.lastEditedBy||'unknown')}${d.lastEditedByEmail?' · '+esc(d.lastEditedByEmail):''}</dd>
+ <dt>Last edited</dt><dd>${esc(d.date)} (saved ${esc(d.updatedAt)})</dd>
+ <dt>Type · countries</dt><dd>${esc(d.type)} · ${esc(d.countries.join(', '))}</dd>
+ <dt>Summary</dt><dd>${esc(d.summary)}</dd>
+ <dt>Keywords</dt><dd>${kws(d.keywords)}</dd>
+ ${d.topic?'<dt>Linked question</dt><dd>'+esc(d.topic)+' · “'+esc(d.says)+'” (claim '+esc(d.claim)+')</dd>':''}
+ <dt>File</dt><dd>${esc(d.originalName||d.file)} · ${d.sizeBytes} bytes · version ${d.version}</dd>
+ <dt>Metadata source</dt><dd>${esc(d.metaSource)} <span class="mute">(placeholder now, LLM later)</span></dd></dl></div>`;
+ $('uresult').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+/* ---------- library ---------- */
+async function loadDocs(){
+ S.docs=await api('/api/documents');
+ $('replaces').innerHTML='<option value="">Choose…</option>'+S.docs.map(d=>`<option value="${esc(d.file)}">${esc(d.title)} (${esc(d.type)}, ${esc(d.date)})</option>`).join('');
+ $('libbody').innerHTML=S.docs.map(docCard).join('');
+}
+
+async function loadLists(){
+ try{
+  const [types,kw,iso]=await Promise.all([api('/api/types'),api('/api/keywords'),api('/api/countries/iso')]);
+  $('isolist').innerHTML=iso.map(c=>`<option value="${esc(c.name)}" label="${esc(c.code)}"></option>`).join('');
+  $('typelist').innerHTML=types.map(t=>`<option value="${esc(t)}"></option>`).join('');
+  $('kwsugg').innerHTML=kw.length?'<span class="mute" style="font-size:.85rem">Existing:</span> '+kw.slice(0,14).map(k=>`<button type="button" class="chip" data-kw="${esc(k.keyword)}">${esc(k.keyword)}</button>`).join(' '):'';
+ }catch{}
+}
+
+function renderCountries(list,check){
+ const on=new Set([...document.querySelectorAll('#countries input:checked')].map(i=>i.value));if(check)on.add(check);
+ const cur=$('c').value;
+ $('c').innerHTML=list.map(c=>`<option value="${esc(c.code)}">${esc(c.name)}</option>`).join('');
+ if(cur&&list.some(c=>c.code===cur))$('c').value=cur;
+ $('countries').innerHTML=list.map(c=>`<label><input type="checkbox" value="${esc(c.code)}"${on.has(c.code)?' checked':''}> ${esc(c.name)} (${esc(c.code)})</label>`).join('');
+}
+async function addCountry(){
+ const v=$('cadd').value.trim(),msg=$('cmsg');if(!v){msg.innerHTML='';return}
+ try{
+  const r=await api('/api/countries',{country:v});
+  renderCountries(await api('/api/countries'),r.code);$('cadd').value='';
+  msg.innerHTML=`<div class="okmsg">${esc(r.name)} (${esc(r.code)}) ${r.added?'was added to the database and is selected for this document.':'is already in the list and is now selected.'}</div>`;
+ }catch(e){msg.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+}
+
+/* ---------- init + events ---------- */
+async function init(){
+ try{
+  const q=await api('/api/questions');S.questions=q.questions;
+  renderCountries(q.countryList);
+  $('sugg').innerHTML='<span class="mute" style="font-size:.85rem">Try:</span> '+q.questions.map(x=>`<button type="button" class="chip" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('');
+  $('foot').textContent+=' Today’s date in the demo: '+q.now+'.';
+  try{$('email').value=localStorage.getItem('tl-email')||''}catch{}
+  syncForm();await loadDocs();await loadLists();
+ }catch(e){$('results').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
+}
+document.addEventListener('click',async e=>{
+ const t=e.target.closest('[data-q],[data-open],[data-bar],[data-kw]');if(!t)return;
+ if(t.dataset.kw){const cur=$('kwin').value.split(',').map(x=>x.trim()).filter(Boolean);if(!cur.includes(t.dataset.kw))cur.push(t.dataset.kw);$('kwin').value=cur.join(', ')}
+ else if(t.dataset.q){showAnswer(t.dataset.q)}
+ else if(t.dataset.bar){const[k,b]=t.dataset.bar.split('|');S.open[k]=b;S.noScroll=true;await showAnswer(S.qid);S.noScroll=false}
+ else if(t.dataset.open){
+  const f=t.dataset.open;
+  try{if(S.texts[f]===undefined)S.texts[f]=(await api('/api/documents/'+encodeURIComponent(f))).body}catch(x){S.texts[f]='Could not load: '+x.message}
+  S.shown[f]=!S.shown[f];S.noScroll=true;
+  if(S.qid)await showAnswer(S.qid);
+  if(S.last)await search($('q').value.trim());
+  $('libbody').innerHTML=S.docs.map(docCard).join('');S.noScroll=false;
+ }
+});
+$('sf').addEventListener('submit',e=>{e.preventDefault();const q=$('q').value.trim();if(q)search(q);else $('results').innerHTML='<div class="mute">Type a question, or pick one of the suggestions.</div>'});
+$('c').addEventListener('change',()=>{if(S.qid){S.noScroll=true;showAnswer(S.qid).then(()=>{S.noScroll=false})}});
+$('uf').addEventListener('submit',upload);
+$('uf').addEventListener('change',e=>{if(e.target.name==='mode')syncForm()});
+$('cbtn').onclick=addCountry;
+$('cadd').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addCountry()}});
+$('pick').onclick=()=>$('file').click();
+$('file').onchange=e=>setFile(e.target.files[0]);
+const drop=$('drop');
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('on')}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('on')}));
+drop.addEventListener('drop',e=>setFile(e.dataTransfer.files[0]));
+init();
 </script></body></html>

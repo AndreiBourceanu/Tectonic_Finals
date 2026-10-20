@@ -96,6 +96,63 @@ const MIGRATIONS = [
     conflict    INTEGER NOT NULL CHECK (conflict IN (0,1))
   );
   CREATE INDEX idx_answer_log_qc ON answer_log(question_id, country);
+  `,
+  // v2: upload metadata, email-based ownership, searchable keywords
+  `
+  ALTER TABLE people ADD COLUMN email TEXT;
+  CREATE UNIQUE INDEX idx_people_email ON people(email) WHERE email IS NOT NULL;
+
+  ALTER TABLE documents ADD COLUMN summary       TEXT NOT NULL DEFAULT '';
+  ALTER TABLE documents ADD COLUMN editor_id     INTEGER REFERENCES people(id);
+  ALTER TABLE documents ADD COLUMN original_name TEXT;
+  ALTER TABLE documents ADD COLUMN size_bytes    INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE documents ADD COLUMN content_hash  TEXT;
+  ALTER TABLE documents ADD COLUMN source        TEXT NOT NULL DEFAULT 'api';
+  ALTER TABLE documents ADD COLUMN meta_source   TEXT NOT NULL DEFAULT 'manual';
+  CREATE INDEX idx_documents_hash ON documents(content_hash);
+
+  CREATE TABLE document_keywords (
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    keyword     TEXT NOT NULL,
+    weight      INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (document_id, keyword)
+  );
+  CREATE INDEX idx_keywords_keyword ON document_keywords(keyword);
+  `,
+  // v3: keywords become a global table (a new keyword is added the first time it is used)
+  `
+  CREATE TABLE keywords (
+    keyword    TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  INSERT OR IGNORE INTO keywords(keyword) SELECT DISTINCT keyword FROM document_keywords;
+
+  DROP INDEX idx_keywords_keyword;
+  ALTER TABLE document_keywords RENAME TO document_keywords_old;
+  CREATE TABLE document_keywords (
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    keyword     TEXT NOT NULL REFERENCES keywords(keyword),
+    weight      INTEGER NOT NULL DEFAULT 1,
+    manual      INTEGER NOT NULL DEFAULT 0 CHECK (manual IN (0,1)),
+    PRIMARY KEY (document_id, keyword)
+  );
+  INSERT INTO document_keywords(document_id, keyword, weight) SELECT document_id, keyword, weight FROM document_keywords_old;
+  DROP TABLE document_keywords_old;
+  CREATE INDEX idx_keywords_keyword ON document_keywords(keyword);
+  `,
+  // v4: document types become a table (a new type is added the first time it is used)
+  `
+  CREATE TABLE document_types (name TEXT PRIMARY KEY COLLATE NOCASE);
+  INSERT OR IGNORE INTO document_types(name) VALUES ('Policy'),('Wiki'),('Chat'),('Email'),('Contract'),('Document');
+  INSERT OR IGNORE INTO document_types(name) SELECT DISTINCT type FROM documents;
+  `,
+  // v5: countries become a table (validated against ISO 3166-1 before a new one is added)
+  `
+  CREATE TABLE countries (
+    code TEXT PRIMARY KEY CHECK (length(code) = 2),
+    name TEXT NOT NULL
+  );
+  INSERT INTO countries(code, name) VALUES ('BE','Belgium'),('NL','Netherlands'),('DE','Germany');
   `
 ];
 
@@ -122,4 +179,4 @@ function openDb(file = DEFAULT_DB) {
   return db;
 }
 
-module.exports = { openDb, migrate, MIGRATIONS, DEFAULT_DB, driverName: driver.name };
+module.exports = { openDb, migrate, Database, MIGRATIONS, DEFAULT_DB, driverName: driver.name };

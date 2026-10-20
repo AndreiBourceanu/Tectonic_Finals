@@ -77,7 +77,7 @@
       "topic": null,
       "claim": null,
       "answer": null,
-      "body": "# Holiday policy\nNot related to payroll questions in the demo. Included to show that the ingestion step ignores documents that are not linked to a question topic."
+      "body": "# Holiday policy\nEmployees build up holiday days per calendar year. Not related to the payroll questions in the demo. Included to show that documents without a linked question are stored and searchable but never used as an answer."
     },
     {
       "file": "legal-update-email.md",

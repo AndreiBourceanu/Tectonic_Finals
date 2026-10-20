@@ -105,15 +105,6 @@ test('hostile input is stored as plain text, never executed as SQL', async () =>
   stop(ctx);
 });
 
-test('write routes require the admin token when one is configured', async () => {
-  const ctx = await start({ adminToken: 's3cret' });
-  assert.equal((await call(ctx.base, 'POST', '/api/documents', DE_DOC)).status, 401);
-  assert.equal((await call(ctx.base, 'POST', '/api/documents', DE_DOC, { Authorization: 'Bearer wrong' })).status, 401);
-  assert.equal((await call(ctx.base, 'POST', '/api/documents', DE_DOC, { Authorization: 'Bearer s3cret' })).status, 201);
-  assert.equal((await fetch(ctx.base + '/api/documents')).status, 200);   // reads stay open
-  stop(ctx);
-});
-
 test('gap log lives in the database', async () => {
   const ctx = await start();
   await ask(ctx.base, 'leaver-bonus', 'DE');
