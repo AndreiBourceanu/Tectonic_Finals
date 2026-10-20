@@ -48,6 +48,7 @@ function toDoc(r, withBody = false) {
 }
 
 const slugify = t => t.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'document';
+const fromAi = ai => ({ summary: ai.summary, keywords: ai.keywords.map((keyword, i) => ({ keyword, weight: Math.max(1, 8 - i) })) });
 const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
 const normKeywords = list => [...new Set((Array.isArray(list) ? list : String(list ?? '').split(',')).map(k => String(k).trim().toLowerCase()))].filter(Boolean);
 
@@ -199,7 +200,7 @@ function createRepo(db) {
   }
   const editorOf = editedBy => (EMAIL_RE.test(editedBy || '') ? emailPersonId(editedBy.toLowerCase()) : null);
 
-  function createDocument(input, editedBy = 'api') {
+  function createDocument(input, editedBy = 'api', opts = {}) { // opts.ai: trusted LLM output from the server, never from request bodies
     return transaction(() => {
       const m = validate(pick(input, {}));
       const source = input.source === undefined ? 'api' : input.source;
@@ -227,15 +228,15 @@ function createRepo(db) {
         file, m.title, m.type, m.date, ownerId, editorOf(editedBy), m.topic, m.claim, m.says, m.body, Buffer.byteLength(m.body), hash, source, original);
       const id = Number(lastInsertRowid);
       setCountries(id, m.countries);
-      const gen = generate(m.body, m.title);
-      writeMeta(id, { summary: m.summary ?? gen.summary, generated: gen.keywords, manual: m.keywords, source: m.summary !== undefined ? 'manual' : 'heuristic' });
+      const gen = opts.ai ? fromAi(opts.ai) : generate(m.body, m.title);
+      writeMeta(id, { summary: m.summary ?? gen.summary, generated: gen.keywords, manual: m.keywords, source: m.summary !== undefined ? 'manual' : opts.ai ? 'llm' : 'heuristic' });
       snapshot(id, 1, m, ownerId, editedBy);
       return getDocument(file);
     });
   }
 
   // PUT semantics: provided fields are merged onto the current document.
-  function updateDocument(file, input, editedBy = 'api') {
+  function updateDocument(file, input, editedBy = 'api', opts = {}) {
     return transaction(() => {
       const row = one('SELECT id, version, owner_id, meta_source FROM documents WHERE file = ?', file);
       if (!row) throw new HttpError(404, 'Document not found');
@@ -250,9 +251,10 @@ function createRepo(db) {
            size_bytes=?, content_hash=?, version=?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
         m.title, m.type, m.date, ownerId, editorId, m.topic, m.claim, m.says, m.body, Buffer.byteLength(m.body), sha256(m.body), version, row.id);
       setCountries(row.id, m.countries);
-      const gen = generate(m.body, m.title);
-      const summary = m.summary !== undefined ? m.summary : row.meta_source === 'heuristic' ? gen.summary : cur.summary;
-      writeMeta(row.id, { summary, generated: gen.keywords, manual: m.keywords, source: m.summary !== undefined ? 'manual' : row.meta_source });
+      const gen = opts.ai ? fromAi(opts.ai) : generate(m.body, m.title);
+      const regen = row.meta_source !== 'manual'; // generated summaries follow the new text, hand-written ones stay
+      const summary = m.summary !== undefined ? m.summary : regen ? gen.summary : cur.summary;
+      writeMeta(row.id, { summary, generated: gen.keywords, manual: m.keywords, source: m.summary !== undefined ? 'manual' : regen ? (opts.ai ? 'llm' : 'heuristic') : 'manual' });
       snapshot(row.id, version, m, ownerId, editedBy);
       return getDocument(file);
     });
@@ -269,19 +271,31 @@ function createRepo(db) {
   }
 
   // One entry point for the UI: new upload, or replace an existing document with a new version.
-  function saveUpload(b) {
+  // Cheap checks run before any LLM call, so invalid or duplicate uploads never cost an API request.
+  function checkUpload(b) {
+    const email = checkEmail(b.email);
+    if (typeof b.fileName !== 'string' || b.fileName.length > 200 || !/\.(md|markdown|txt)$/i.test(b.fileName)) bad('Only .md and .txt files are supported for now');
+    if (typeof b.content !== 'string' || !b.content.trim()) bad('The file is empty');
+    if (b.content.length > 200_000) bad('The document text is empty or too large (max 200,000 characters, about 200 KB)');
+    if (!b.replaces) {
+      const dup = one('SELECT title FROM documents WHERE content_hash = ?', sha256(b.content));
+      if (dup) throw new HttpError(409, `This exact file is already stored as "${dup.title}". Use "Update" to replace it.`);
+    }
+    return email;
+  }
+
+  function saveUpload(b, opts = {}) {
     return transaction(() => {
-      const email = checkEmail(b.email);
-      if (typeof b.fileName !== 'string' || b.fileName.length > 200 || !/\.(md|markdown|txt)$/i.test(b.fileName)) bad('Only .md and .txt files are supported for now');
-      if (typeof b.content !== 'string' || !b.content.trim()) bad('The file is empty');
+      const email = checkUpload(b);
       const now = getSetting('now');
       const text = v => (v === undefined || v === null || v === '' ? undefined : v);
       const topicIn = text(b.topic), answerIn = text(b.answer);
       const kwIn = text(b.keywords) === undefined ? [] : normKeywords(b.keywords);
       const typeIn = typeof b.type === 'string' ? b.type.trim().replace(/\s+/g, ' ') : '';
-      const typeIsNew = !!typeIn && !one('SELECT 1 AS x FROM document_types WHERE name = ?', typeIn);
+      const typeEff = b.replaces ? typeIn : (typeIn || opts.ai?.type || ''); // the model only suggests a type for new documents
+      const typeIsNew = !!typeEff && !one('SELECT 1 AS x FROM document_types WHERE name = ?', typeIn);
       const newKeywords = kwIn.filter(k => !one('SELECT 1 AS x FROM keywords WHERE keyword = ?', k));
-      const added = () => ({ type: typeIsNew ? typeIn : null, keywords: newKeywords }); // what was new to the database
+      const added = () => ({ type: typeIsNew ? typeEff : null, keywords: newKeywords }); // what was new to the database
       const withKw = f => { if (kwIn.length) f.keywords = kwIn; return f; };
 
       if (b.replaces) {
@@ -296,17 +310,17 @@ function createRepo(db) {
         const newAnswer = answerIn ?? cur.says;
         if (topic && newAnswer && text(b.claim) === undefined && (answerIn !== undefined || topicIn !== undefined)) fields.claim = suggestClaim(topic, newAnswer);
         if (text(b.claim) !== undefined) fields.claim = b.claim;
-        const document = updateDocument(b.replaces, fields, email);
+        const document = updateDocument(b.replaces, fields, email, opts);
         return { action: 'updated', document, added: added() };
       }
       const fields = withKw({
         title: text(b.title) ?? headingOf(b.content) ?? titleFromName(b.fileName),
-        type: typeIn || 'Document', date: text(b.date) ?? now, countries: b.countries,
+        type: typeEff || 'Document', date: text(b.date) ?? now, countries: b.countries,
         topic: topicIn ?? null, answer: answerIn, body: b.content,
         ownerEmail: email, source: 'upload', originalName: b.fileName
       });
       if (topicIn) fields.claim = text(b.claim) ?? (answerIn ? suggestClaim(topicIn, answerIn) : undefined);
-      const document = createDocument(fields, email);
+      const document = createDocument(fields, email, opts);
       return { action: 'created', document, added: added() };
     });
   }
@@ -435,7 +449,7 @@ function createRepo(db) {
     hasVerification, closeVerification, verificationStats, logActivity, listActivity, activityCounts, askedCount,
     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
-    saveUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, documentVersions, logAnswer, gapReport
+    saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, documentVersions, logAnswer, gapReport
   };
 }
 
