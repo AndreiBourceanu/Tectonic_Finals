@@ -35,10 +35,12 @@ test('adding a country: only real ones, stored once, then usable everywhere', as
 
   const add = await post(ctx.base, '/api/countries', { country: 'france' });
   assert.equal(add.status, 201);
-  assert.deepEqual(await add.json(), { code: 'FR', name: 'France', added: true });
+  assert.deepEqual(await add.json(), { code: 'FR', name: 'France', added: true, gaps: 3 }); // each demo question has no source for it yet
   const again = await post(ctx.base, '/api/countries', { country: 'FR' });
   assert.equal(again.status, 200);
-  assert.equal((await again.json()).added, false);
+  const againBody = await again.json();
+  assert.equal(againBody.gaps, 0);
+  assert.equal(againBody.added, false);
 
   const list = await (await fetch(ctx.base + '/api/countries')).json();
   assert.equal(list.filter(c => c.code === 'FR').length, 1);

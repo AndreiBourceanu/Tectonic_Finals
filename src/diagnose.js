@@ -5,6 +5,30 @@
 const { parseMonth } = require('./trust');
 
 const STALE_MONTHS = 36;
+// "No source about this question covers this country" as a finding. Contacts: whoever owns or edited the documents that do exist.
+function coverageGap(repo, q, topicDocs, code) {
+  const files = topicDocs.slice(0, 4).map(d => d.file);
+  const owner = topicDocs.find(d => d.owner)?.owner;
+  return {
+    kind: 'gap', confidence: 'medium', source: 'local', key: code,
+    explanation: `No source about “${q.text}” covers ${code}.`,
+    action: `Ask ${q.expert || owner || 'the owner of the existing documents'} whether the rule also applies in ${code}, then add a document for ${code} linked to this question.`,
+    files: files.map(f => ({ file: f, quote: '' })),
+    contacts: repo.peopleOfDocuments(files).slice(0, 2).map(p => ({ personId: p.id, reason: 'owns or last edited the existing documents on this question' }))
+  };
+}
+
+// Adding a country changes what "covered" means, so every question is checked for it straight away (no model needed).
+function diagnoseCountry({ repo, code }) {
+  const findings = [];
+  for (const q of repo.listQuestions()) {
+    const topicDocs = repo.getQuestionWithSources(q.id)?.sources || [];
+    if (topicDocs.length && !topicDocs.some(d => d.countries.includes(code))) findings.push(coverageGap(repo, repo.getQuestion(q.id), topicDocs, code));
+  }
+  const ids = new Set(repo.saveFindings(null, findings));
+  return { country: code, findings: repo.listFindings({ status: 'open' }).filter(f => ids.has(f.id)) };
+}
+
 const short = (s, n = 110) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 
 // Deterministic checks over the changed document and its neighbours.
@@ -28,17 +52,12 @@ function localFindings({ repo, doc, docs, now }) {
     });
   }
 
-  // 2. A country that other documents cover but no source about this question covers.
+  // 2. A country in the database that no source about this question covers. One finding per question and country.
   if (doc.topic) {
     const q = repo.getQuestion(doc.topic);
-    const covered = new Set(docs.filter(d => d.topic === doc.topic).flatMap(d => d.countries));
-    const missing = repo.countriesInUse().filter(c => !covered.has(c));
-    if (q && missing.length) out.push({
-      kind: 'gap', confidence: 'medium', source: 'local', key: missing.join(','),
-      explanation: `No source about “${q.text}” covers ${missing.join(', ')}.`,
-      action: `Ask ${doc.owner || q.expert || 'the owner'} whether the rule also applies there, and add a document for ${missing.join(', ')}.`,
-      files: [{ file: doc.file, quote: '' }], contacts: contactsOf([doc.file])
-    });
+    const topicDocs = repo.getQuestionWithSources(doc.topic)?.sources || [];
+    const covered = new Set(topicDocs.flatMap(d => d.countries));
+    if (q) for (const code of repo.countryCodes().filter(c => !covered.has(c))) out.push(coverageGap(repo, q, topicDocs, code));
   }
 
   // 3. No named owner, or very old.
@@ -62,7 +81,7 @@ function localFindings({ repo, doc, docs, now }) {
 async function diagnose({ repo, llm, file, now }) {
   const doc = repo.getDocument(file);
   if (!doc) return null;
-  const resolved = repo.resolveStaleFindings(file); // what earlier findings said about the old version is settled by this edit
+  const resolved = repo.resolveStaleFindings(file) + repo.resolveCoveredGaps(); // an edit settles what earlier findings said about the old version, and a new source can close a coverage gap
   const near = repo.neighbours(file, 4);
   const docs = [doc, ...near];
   const info = { used: false, model: null, error: null };
@@ -95,4 +114,4 @@ async function diagnose({ repo, llm, file, now }) {
   };
 }
 
-module.exports = { diagnose, localFindings };
+module.exports = { diagnose, diagnoseCountry, localFindings };

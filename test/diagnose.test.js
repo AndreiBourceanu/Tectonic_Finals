@@ -200,3 +200,63 @@ test('diagnose through the real client: schema sent, verified result returned, k
   assert.equal((await bad.diagnose({ docs, people: [], today: '2026-09' })).error, 'unusable answer');
   assert.equal((await createLlm({ env: {} }).diagnose({ docs, people: [], today: '2026-09' })).error, 'disabled');
 });
+
+test('adding a country checks every question for coverage straight away, without asking anything first', async () => {
+  const ctx = await start();
+  try {
+    const r = await call(ctx.base, '/api/countries', { country: 'France' });
+    assert.equal(r.code, 'FR');
+    assert.equal(r.gaps, 3, 'one gap per demo question');
+    const open = (await get(ctx.base, '/api/findings')).body.filter(f => f.kind === 'gap' && /\bFR\b/.test(f.explanation));
+    assert.equal(open.length, 3);
+    assert.ok(open.every(f => f.documents.length > 0 && f.action.includes('FR') && f.contacts.length > 0), 'evidence, a suggested fix and people to contact');
+    const again = await call(ctx.base, '/api/countries', { country: 'fr' });
+    assert.equal(again.gaps, 0, 'a country that already exists is not checked again');
+    assert.equal((await get(ctx.base, '/api/findings')).body.filter(f => /\bFR\b/.test(f.explanation)).length, 3, 'no duplicates');
+    assert.equal((await call(ctx.base, '/api/countries', { country: 'Atlantis' })).status, 400);
+  } finally { stop(ctx); }
+});
+
+test('a coverage gap closes by itself when a document covers that country', async () => {
+  const ctx = await start();
+  try {
+    await call(ctx.base, '/api/countries', { country: 'France' });
+    const isGap = (list, q) => list.some(f => f.kind === 'gap' && /\bFR\b/.test(f.explanation) && f.explanation.includes(q));
+    let open = (await get(ctx.base, '/api/findings')).body;
+    assert.ok(isGap(open, 'leaver'));
+    const created = await call(ctx.base, '/api/documents', { file: 'fr-leaver-bonus.md', title: 'Prime de départ France', type: 'Policy', date: '2026-09', owner: 'Jan Weber (Compliance DE)',
+      countries: ['FR'], topic: 'leaver-bonus', claim: 'A', answer: 'Pro rata by months worked', body: '# Prime de départ\nLa prime annuelle est versée au prorata des mois travaillés.' });
+    assert.equal(created.status, 201);
+    await diagnose(ctx.base, 'fr-leaver-bonus.md');
+    open = (await get(ctx.base, '/api/findings')).body;
+    assert.ok(!isGap(open, 'leaver'), 'the leaver-bonus gap for FR is closed');
+    assert.ok(isGap(open, 'new hire') || isGap(open, 'deadline'), 'other questions still have their gap');
+    const resolved = (await get(ctx.base, '/api/findings?status=resolved')).body;
+    assert.ok(resolved.some(f => /leaver/.test(f.explanation)));
+  } finally { stop(ctx); }
+});
+
+test('the demo gap (leaver bonus in Germany) shows as a finding and closes when a German source is added', async () => {
+  const ctx = await start();
+  try {
+    const r = await diagnose(ctx.base, 'payroll-manual-v7.md');
+    assert.ok(r.findings.some(f => f.kind === 'gap' && /\bDE\b/.test(f.explanation)));
+    await call(ctx.base, '/api/documents', { file: 'de-leaver-bonus.md', title: 'Payroll Handbuch', type: 'Policy', date: '2026-09', owner: 'Jan Weber (Compliance DE)',
+      countries: ['DE'], topic: 'leaver-bonus', claim: 'A', answer: 'Pro rata by months worked', body: '# Payroll Handbuch\nDer Bonus wird pro rata gezahlt.' });
+    const after = await diagnose(ctx.base, 'de-leaver-bonus.md');
+    assert.ok(!after.findings.some(f => f.kind === 'gap' && /\bDE\b/.test(f.explanation) && /leaver/.test(f.explanation)));
+    const resolved = (await get(ctx.base, '/api/findings?status=resolved')).body;
+    assert.ok(resolved.some(f => f.kind === 'gap' && /\bDE\b/.test(f.explanation) && /leaver/.test(f.explanation)), 'the gap is listed as resolved');
+  } finally { stop(ctx); }
+});
+
+test('the demo gaps are listed as soon as the app starts, before anything is uploaded or asked', async () => {
+  const ctx = await start();
+  try {
+    const open = (await get(ctx.base, '/api/findings')).body.filter(f => f.kind === 'gap');
+    const texts = open.map(f => f.explanation).join(' | ');
+    assert.match(texts, /leaver.*DE/, texts);
+    assert.match(texts, /new hire.*NL|deadline.*NL/i, texts);
+    assert.ok(open.every(f => f.source === 'local' && f.contacts.length > 0 && f.action.length > 0));
+  } finally { stop(ctx); }
+});

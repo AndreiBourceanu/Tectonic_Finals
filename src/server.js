@@ -10,7 +10,7 @@ const { openDb, driverName } = require('./db');
 const { createRepo, HttpError } = require('./repo');
 const { seedIfEmpty } = require('./seed');
 const { ask, draft } = require('./ask');
-const { diagnose } = require('./diagnose');
+const { diagnose, diagnoseCountry } = require('./diagnose');
 
 const INDEX = path.join(__dirname, '..', 'public', 'index.html');
 
@@ -19,6 +19,8 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
   const repo = createRepo(db);
   if (process.env.SEED_DEMO !== 'false') seedIfEmpty(repo); // demo data only when the DB is empty
   repo.backfillMetadata();
+  for (const code of repo.countryCodes()) diagnoseCountry({ repo, code }); // coverage gaps are listed from the start, not only after a change
+  repo.resolveCoveredGaps();
   const today = () => now || process.env.TRUST_NOW || repo.getSetting('now');
 
   // Knowledge check after every upload or edit. It runs in the background so the upload answers at once; the page
@@ -117,7 +119,8 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
         if (m === 'GET' && parts.length === 3 && file === 'iso') return send(res, 200, ISO); // every real country, for suggestions
         if (m === 'POST' && parts.length === 2) {
           const r = repo.addCountry((await readJson(req)).country);
-          return send(res, r.added ? 201 : 200, r);
+          const check = r.added ? diagnoseCountry({ repo, code: r.code }) : null; // a new country is checked for coverage straight away
+          return send(res, r.added ? 201 : 200, { ...r, gaps: check ? check.findings.length : 0 });
         }
       }
       if (m === 'GET' && r1 === 'types' && parts.length === 2) return send(res, 200, repo.listTypes());

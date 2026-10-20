@@ -4,6 +4,11 @@ Trust Lens is the bridge between the customer organisation's search engine/AI an
 
 Answers with visible trust. For every question, Trust Lens finds the relevant company documents, scores each one on **freshness, ownership, applicability and agreement**, and tells you whether you can rely on the answer, should check first, or should not act yet. It surfaces conflicts between sources, flags knowledge gaps, and names who to ask.
 
+Around that core:
+- **Search:** the question is interpreted by an LLM (Gemini) that can only pick keywords, people and stored questions that exist in our database. Documents are then fetched locally and scored by the deterministic trust algorithm, and a short answer is drafted from the strongest sources, with citations.
+- **Upload:** staff upload or edit documents; the owner is their email, and summary, keywords and type are generated.
+- **Knowledge check:** after every upload or edit, the system checks the documents around it for conflicts, gaps, duplicates and outdated or unowned knowledge, and suggests how to fix each and who to contact.
+
 The data lives in a real SQLite database. The demo data is fictional: a company ("Northwind"), 11 documents, 6 people and three payroll questions.
 
 ## Quick start
@@ -15,7 +20,7 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 72 tests (node:test, in-memory databases)
+npm test             # 109 tests (node:test, in-memory databases)
 npm run demo         # scripted CLI demo: good / conflict / gap / gap closed live
 npm run reseed       # delete the database file and load the demo data again
 npm run llm:check    # confirms your Gemini key works (never prints the key)
@@ -43,13 +48,17 @@ npm run llm:check    # confirms your Gemini key works (never prints the key)
                                    ┌──────────────────────────────────────┐
  POST/PUT /api/documents ────────► │  SQLite  (data/trustlens.db)         │
  (staff, connectors, AI agent)     │  documents · people · versions ·     │
-                                   │  questions · answer_log · settings   │
+                                   │  keywords · questions · findings ·   │
+                                   │  answer_log · settings               │
                                    └───────────────┬──────────────────────┘
                                                    │ src/repo.js (all SQL, parameterised)
                                                    ▼
  UI ◄── JSON ◄── src/server.js ◄── src/trust.js (pure scoring + verdict)
                        │
-                       └─► every answer that is not green is written to answer_log
+                       ├─► every answer that is not green is written to answer_log
+                       ├─► src/ask.js: search = LLM interprets, we retrieve and score, LLM drafts
+                       └─► src/diagnose.js: after each upload or edit, findings (conflicts, gaps, ...)
+                               both use src/llm.js (Gemini); without it, the built-in fallbacks run
 ```
 
 1. **Database:** documents, people, versions, questions and the answer log are stored in SQLite.
@@ -76,6 +85,9 @@ SQLite in WAL mode with foreign keys on. The two drivers (built-in `node:sqlite`
 | `document_keywords` | which keywords belong to which document, with a weight and a flag for manually entered ones |
 | `questions` | the question text and the expert to contact when documents are not enough |
 | `answer_log` | every answer that was not green: question, country, verdict, gap and conflict flags |
+| `findings` | problems found by the knowledge check: kind (conflict, gap, duplicate, outdated, ownership), confidence, explanation, suggested fix, status (open, resolved, dismissed), source (local or model) |
+| `finding_documents` | the documents a finding is about, with the version and the quote it was based on |
+| `finding_contacts` | the people suggested to fix a finding, with the reason |
 | `settings` | the demo reference date |
 
 The database enforces the rules as well as the code: dates must look like `YYYY-MM`, a document with a topic must have a claim and an answer, topics must reference an existing question, and verdicts are limited to `rely`, `check` or `hold`.
@@ -126,7 +138,7 @@ A plain Node `http` server with no framework.
 | POST | `/api/findings/:id/status` | body `{status}` (`open`, `resolved`, `dismissed`). Returns the finding |
 | GET | `/api/search?q=` | plain keyword match over questions and documents (used internally and kept for API users) |
 | GET | `/api/countries` | countries in use |
-| POST | `/api/countries` | body `{country}` (name or ISO code); adds a real country, `201` if new, `200` if it already existed, `400` if not a country |
+| POST | `/api/countries` | body `{country}` (name or ISO code); adds a real country, `201` if new (with `gaps`: how many questions have no source for it, found by the knowledge check), `200` if it already existed, `400` if not a country |
 | GET | `/api/countries/iso` | all 249 ISO 3166-1 countries (for suggestions) |
 | GET | `/api/types` | all document types |
 | GET | `/api/keywords?limit=` | all keywords with how many documents use them (default 40, max 500) |
@@ -161,7 +173,7 @@ The home page has a **search bar** with a country selector, and an **Add or upda
 - **Countries:** the "Applies to" checkboxes and the search country selector come from the `countries` table (it starts with Belgium, Netherlands and Germany). The upload form has an **Add country** box with all 249 official countries of ISO 3166-1 as suggestions. You can type the English name or the two-letter code (`France`, `fr`; a few common aliases such as `UK` work too). Anything that is not a real country is rejected (`400`), and a country is stored once. A new country can then be used on documents and in searches; a question with no document for it shows as a knowledge gap.
 - **Type:** the Type field is free text with the stored types as suggestions. An unknown type is added to the `document_types` table the first time it is used (the confirmation says so). Matching ignores case and extra spaces, so "meeting NOTES" reuses "Meeting notes". Types are 1 to 40 characters (letters, digits, spaces, `& / . -`). On an update, leaving the type empty keeps the current one.
 - **Keywords (optional):** the upload form has one Keywords field (comma separated). Manual keywords are added to the generated ones and ranked first. Every keyword is stored once in the global `keywords` table, so a new keyword is added the first time anyone uses it, and the form lists existing keywords as clickable suggestions. Manual keywords are kept when a document is updated without new keywords; giving new ones replaces the manual set. The upload response lists what was new to the database (`added.type`, `added.keywords`).
-- **Question links:** the upload form no longer links a document to a question. Uploaded documents are searchable by their keywords but do not take part in a trust verdict yet; the API (`topic`, `answer`, `claim` on `POST /api/upload` and `/api/documents`) still supports it, and the LLM step is meant to do this automatically.
+- **Question links:** the upload form does not link a document to a question. An uploaded document is found by search through its keywords and is scored on its own (freshness, owner, applicability; nothing can confirm it, so "agreed" stays 0). The knowledge check compares it with related documents. The API (`topic`, `answer`, `claim` on `POST /api/upload` and `/api/documents`) can still link it to a question, which puts it into that question's agreement and conflict scoring.
 - **Search:** see 5e below.
 
 ### 5d. LLM integration (Gemini)
@@ -169,6 +181,8 @@ The home page has a **search bar** with a country selector, and an **Add or upda
 1. Create a key in Google AI Studio and put it in a file in the project folder: `.env` or any `*.env` file, containing either `GEMINI_API_KEY=your-key` or just the key. (`GEMENI_API_KEY` is accepted as a spelling.) Environment variables set in your shell win over files. These files are git-ignored; **never commit a key**.
 2. Run `npm run llm:check` once. It first tests the network and key by listing the models your key can use (and whether `GEMINI_MODEL` is one of them), then analyses a sample document, with timings. It describes each env file (size, encoding, variable names, whether a key was detected; never the key itself) and whether Gemini answers in the expected shape. The loader also accepts `KEY: value` lines, UTF-16 files (what some Windows editors and PowerShell write) and a key pasted among other text.
 3. Run `npm start`. The first lines say `LLM: Gemini (...)` or `LLM: off`.
+
+**Choosing a model.** The default is `gemini-3.5-flash`, which worked reliably in testing (about 5 to 12 s per call). `gemini-3.8-flash` was often much faster but sometimes stalled until the timeout; `gemini-2.5-flash` is listed by the API but is closed to new users (it answers 404). Models change quickly, so test any candidate on your key with `GEMINI_MODEL=<name> npm run llm:check` (run it two or three times) and put the one you like in `.env`. A lighter model such as `gemini-3.1-flash-lite` should be faster, but the quality of drafted answers and findings may drop. If a model stalls, `GEMINI_API_MODE=generateContent` switches to the older endpoint.
 
 How it works (`src/llm.js`, plain HTTPS, no SDK): on upload, the server first validates the request (bad email, wrong file type, empty or duplicate files never reach the model), then sends the document text (max 12,000 characters) with a prompt that treats it as untrusted data and offers the known document types. The answer must be JSON with `summary`, `keywords` and `type`; it is validated and cleaned (lengths, allowed characters, at most 8 keywords) before use. The model suggests a type only for **new** documents and only when the user left Type empty; a suggested new type is added to the types table. The call happens before the database transaction, never inside it, with a 30 s timeout (per attempt, one retry on timeout) and one retry after a 429 or 503. Any failure (no key, rate limit, timeout, unusable answer) falls back to the heuristic, so uploads never fail because of the LLM; the upload response and the page say which was used (`llm: {used, model, error}`). The key is sent only in a request header and is removed from any logged or returned error text.
 
@@ -194,11 +208,11 @@ The page shows step 1 immediately ("Refining with Gemini…"), then replaces it 
 
 ### 5f. Knowledge check (`src/diagnose.js`)
 
-After every upload or edit (`/api/upload`, `POST` and `PUT /api/documents`), the server starts a check in the background, so the upload answers at once and the page asks for the result (`POST /api/diagnose`, which waits for the same run).
+The check runs **after every upload or edit** (`/api/upload`, `POST` and `PUT /api/documents`), **when a country is added** (`POST /api/countries`: every question is checked for that country at once, and the response says how many gaps `gaps` were found) and **when the app starts** (coverage of every country, so the demo gaps are listed before anything is asked). Coverage gaps close by themselves: when a document about the same question covers the country, the finding is resolved. For uploads and edits the server starts a check in the background, so the upload answers at once and the page asks for the result (`POST /api/diagnose`, which waits for the same run).
 
 1. **Settle old findings.** Open findings about an earlier *version* of this document are marked resolved ("a document it was about was updated"). Findings record the document versions they were based on.
 2. **Neighbours (`repo.neighbours`).** The 4 documents that share the most keywords with the changed one, plus the documents of the same stored question.
-3. **Local rules (always run, no model).** Same question with different claims for a shared country (conflict); a country that other documents cover but no source about this question covers (gap); documents with no owner; documents not updated for more than 36 months (outdated).
+3. **Local rules (always run, no model).** Same question with different claims for a shared country (conflict); a country in the `countries` table that no source about this question covers (gap, one finding per question and country); documents with no owner; documents not updated for more than 36 months (outdated).
 4. **Model diagnosis (`llm.diagnose`).** The changed document (up to 6,000 characters) and its neighbours (4,000 each, 20,000 in total) go into one prompt, with the people list. The model reports conflicts, duplicates, outdated documents and gaps with an explanation, a suggested fix and up to two people to contact. This finds contradictions without any hand-written label, so an uploaded document is compared with the others.
 5. **Validation (`sanitizeDiagnosis`).** A finding is kept only if its document numbers are real, its **quotes occur verbatim in the document** (markdown and spacing ignored), and a conflict, duplicate or outdated finding has at least one verified quote. Contacts must be names in the people table; if none is valid, the owners and last editors of the documents involved are used. One verified side only lowers "high" confidence to "medium". At most 5 findings.
 6. **Storage (`findings`, `finding_documents`, `finding_contacts`).** An open finding about the same documents is refreshed, not duplicated. A dismissed finding is not brought back unless one of its documents changed. If the model and the local rules find the same conflict, there is one finding with the model's wording.
@@ -216,6 +230,8 @@ A single page with no build step. The search bar calls `POST /api/ask` (quick re
 - the verdict card (colour, answer, based-on source and score, conflict banner, who can help);
 - the ranked sources, each with four tappable score bars that show *why*;
 - an **Open source file** button that shows the original document text.
+
+Around the search result the page also shows the heading (the user's own query), a **Draft answer** box (written by the model, with citations and trust scores), and a line saying what the model understood. Under an upload it shows a **Knowledge check** card, and further down a **Knowledge health** list of all open findings with evidence, how to fix, who can help (email link) and a *Dismiss* button.
 
 All API text is HTML-escaped, and an error banner appears if the backend is unreachable.
 
@@ -239,7 +255,7 @@ Run `npm run demo` to see all four in the terminal.
 - `countries.test.js`: the ISO list, resolving names and codes, rejecting invented countries, using a new country, email to people record.
 - `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
 - `ask.test.js`: closed-vocabulary check, query prompt, search without and with the model (stubbed), model failure, cache, standalone documents, relevance order, gap log, and the draft step (which sources are sent, only those applying to the country, no call when none apply, failure, cache, prompt caps and injection guard, citation validation).
-- `diagnose.test.js`: local rules, no duplicates on a second run, automatic check after an upload, model findings and suggested people, one finding for the same conflict, model failure, dismiss and resolve-on-edit, endpoint validation, validation of the model output (invented quotes, people and documents), prompt caps, the real client.
+- `diagnose.test.js`: local rules, a new country checked at once, gaps closing when a source is added, demo gaps listed at start, no duplicates on a second run, automatic check after an upload, model findings and suggested people, one finding for the same conflict, model failure, dismiss and resolve-on-edit, endpoint validation, validation of the model output (invented quotes, people and documents), prompt caps, the real client.
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
 
 ## Project layout

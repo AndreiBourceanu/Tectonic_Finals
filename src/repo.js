@@ -484,6 +484,22 @@ function createRepo(db) {
       WHERE status = 'open' AND id IN (SELECT fd.finding_id FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE d.file = ? AND fd.version <> d.version)`, file).changes;
   }
 
+  // A coverage gap closes by itself once a document about the same question covers that country.
+  function resolveCoveredGaps() {
+    let n = 0;
+    for (const f of all("SELECT id, fingerprint FROM findings WHERE status = 'open' AND kind = 'gap' AND source = 'local'")) {
+      const code = f.fingerprint.split('|').pop();
+      if (!/^[A-Z]{2}$/.test(code)) continue;
+      const d = one('SELECT d.topic AS t FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE fd.finding_id = ? LIMIT 1', f.id);
+      if (!d || !d.t) continue;
+      if (one('SELECT 1 AS x FROM documents d JOIN document_countries c ON c.document_id = d.id WHERE d.topic = ? AND c.country = ?', d.t, code)) {
+        run("UPDATE findings SET status = 'resolved', resolved_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", `A source now covers ${code}.`, f.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
   function listFindings({ status = 'open', file = null } = {}) {
     const rows = all(`SELECT * FROM findings WHERE (? IS NULL OR status = ?)
         AND (? IS NULL OR id IN (SELECT fd.finding_id FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE d.file = ?))
@@ -522,7 +538,7 @@ function createRepo(db) {
     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
     saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, retrieve, getQuestion, documentVersions,
-    neighbours, countriesInUse, personByName, peopleOfDocuments, saveFindings, resolveStaleFindings, listFindings, setFindingStatus, logAnswer, gapReport
+    neighbours, countriesInUse, personByName, peopleOfDocuments, saveFindings, resolveStaleFindings, resolveCoveredGaps, listFindings, setFindingStatus, logAnswer, gapReport
   };
 }
 

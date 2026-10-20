@@ -336,7 +336,8 @@ async function addCountry(){
  try{
   const r=await api('/api/countries',{country:v});
   renderCountries(await api('/api/countries'),r.code);$('cadd').value='';
-  msg.innerHTML=`<div class="okmsg">${esc(r.name)} (${esc(r.code)}) ${r.added?'was added to the database and is selected for this document.':'is already in the list and is now selected.'}</div>`;
+  msg.innerHTML=`<div class="okmsg">${esc(r.name)} (${esc(r.code)}) ${r.added?'was added to the database and is selected for this document.':'is already in the list and is now selected.'}${r.added&&r.gaps?` <strong>Knowledge check: ${r.gaps} gap(s) found</strong>, no document covers it yet. See Knowledge health below.`:''}</div>`;
+  if(r.added)loadHealth();
  }catch(e){msg.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
 }
 
