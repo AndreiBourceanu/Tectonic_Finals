@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { answer, COUNTRIES, MAX } = require('./trust');
-const { openDb } = require('./db');
+const { openDb, driverName } = require('./db');
 const { createRepo, HttpError } = require('./repo');
 const { seedIfEmpty } = require('./seed');
 
@@ -51,7 +51,7 @@ function createServer({ now, db = openDb(), adminToken = process.env.ADMIN_TOKEN
       const [, r1, file, sub] = parts;
 
       if (m === 'GET' && r1 === 'health' && parts.length === 2) {
-        return send(res, 200, { ok: true, now: today(), documents: repo.countDocuments() });
+        return send(res, 200, { ok: true, now: today(), documents: repo.countDocuments(), driver: driverName });
       }
       if (m === 'GET' && r1 === 'questions' && parts.length === 2) {
         return send(res, 200, { now: today(), countries: COUNTRIES, max: MAX, questions: repo.listQuestions() });

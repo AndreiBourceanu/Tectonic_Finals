@@ -45,6 +45,7 @@ const ICON = { rely: '🟢', check: '🟡', hold: '🔴' };
   const gaps = await (await fetch(base + '/api/gaps')).json();
   console.log('\n=== KNOWLEDGE GAPS LOGGED ===');
   console.log(gaps.ranked.map(g => `${g.questionId} (${g.country}) asked ${g.asked}x, gaps ${g.gaps}, conflicts ${g.conflicts}`).join('\n'));
+  server.closeAllConnections?.();
   server.close();
   server.db.close();
 })();

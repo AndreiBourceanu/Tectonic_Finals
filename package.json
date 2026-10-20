@@ -4,12 +4,17 @@
   "description": "Trust-scored knowledge answers: freshness, ownership, applicability, agreement.",
   "main": "src/server.js",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "seed": "node --disable-warning=ExperimentalWarning src/seed.js",
-    "reseed": "node --disable-warning=ExperimentalWarning src/seed.js --reset",
-    "test": "node --disable-warning=ExperimentalWarning --test",
-    "demo": "node --disable-warning=ExperimentalWarning demo/demo.js"
+    "start": "node src/server.js",
+    "seed": "node src/seed.js",
+    "reseed": "node src/seed.js --reset",
+    "test": "node --test",
+    "demo": "node demo/demo.js"
   },
-  "engines": { "node": ">=22.13" },
-  "license": "MIT"
+  "engines": {
+    "node": ">=18.18"
+  },
+  "license": "MIT",
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
 }

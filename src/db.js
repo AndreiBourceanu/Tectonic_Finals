@@ -1,7 +1,26 @@
 'use strict';
 // SQLite via Node's built-in node:sqlite (Node >= 22.13, no dependencies).
 // Schema changes are append-only migrations tracked with PRAGMA user_version.
-const { DatabaseSync } = require('node:sqlite');
+// Two interchangeable SQLite drivers with the same API surface (prepare/get/all/run/exec/close):
+//   1. node:sqlite (built into Node >= 22.13, no install), preferred when available
+//   2. better-sqlite3 (optional npm package), used on older Node such as 18/20
+// Force one with TRUST_SQLITE_DRIVER=node:sqlite|better-sqlite3.
+function loadDriver() {
+  const forced = process.env.TRUST_SQLITE_DRIVER;
+  if (!forced || forced === 'node:sqlite') {
+    const original = process.emitWarning; // hide Node's "SQLite is experimental" notice
+    process.emitWarning = (w, ...rest) => (/sqlite/i.test(String((w && w.message) || w)) ? undefined : original.call(process, w, ...rest));
+    try { return { name: 'node:sqlite', Database: require('node:sqlite').DatabaseSync }; }
+    catch { if (forced) throw new Error('node:sqlite is not available in this Node version'); }
+    finally { process.emitWarning = original; }
+  }
+  try { return { name: 'better-sqlite3', Database: require('better-sqlite3') }; }
+  catch {
+    throw new Error(`No SQLite driver available on Node ${process.version}. Either install Node 22.13 or newer (https://nodejs.org, or: nvm install 22), or run: npm install`);
+  }
+}
+const driver = loadDriver();
+const Database = driver.Database;
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -97,10 +116,10 @@ function migrate(db) {
 
 function openDb(file = DEFAULT_DB) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
+  const db = new Database(file);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;');
   migrate(db);
   return db;
 }
 
-module.exports = { openDb, migrate, MIGRATIONS, DEFAULT_DB };
+module.exports = { openDb, migrate, MIGRATIONS, DEFAULT_DB, driverName: driver.name };

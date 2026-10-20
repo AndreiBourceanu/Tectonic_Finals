@@ -4,29 +4,29 @@ const assert = require('node:assert/strict');
 const { createServer } = require('../src/server');
 const { openDb } = require('../src/db');
 
-let server, base;
-test.before(async () => {
-  server = createServer({ now: '2026-09', db: openDb(':memory:') });
-  await new Promise(r => server.listen(0, r));
-  base = `http://127.0.0.1:${server.address().port}`;
-});
-test.after(() => { server.close(); server.db.close(); });
+// No top-level before/after hooks: Node 18 does not run them. The server starts at load time
+// and the last test closes it.
+const server = createServer({ now: '2026-09', db: openDb(':memory:') });
+const ready = new Promise(r => server.listen(0, () => r(`http://127.0.0.1:${server.address().port}`)));
 
-const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+const post = async (p, body) => fetch((await ready) + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
 
 test('GET /api/health', async () => {
-  const j = await (await fetch(base + '/api/health')).json();
-  assert.deepEqual(j, { ok: true, now: '2026-09', documents: 11 });
+  const j = await (await fetch((await ready) + '/api/health')).json();
+  assert.equal(j.ok, true);
+  assert.equal(j.now, '2026-09');
+  assert.equal(j.documents, 11);
+  assert.ok(['node:sqlite', 'better-sqlite3'].includes(j.driver));
 });
 
 test('GET /api/questions lists the questions', async () => {
-  const j = await (await fetch(base + '/api/questions')).json();
+  const j = await (await fetch((await ready) + '/api/questions')).json();
   assert.equal(j.questions.length, 3);
   assert.deepEqual(j.countries, ['BE', 'NL', 'DE']);
 });
 
 test('GET / serves the UI', async () => {
-  const r = await fetch(base + '/');
+  const r = await fetch((await ready) + '/');
   assert.equal(r.status, 200);
   assert.match(await r.text(), /Trust Lens/);
 });
@@ -49,7 +49,7 @@ test('GET /api/gaps logs non-reliable answers only', async () => {
   await post('/api/answer', { questionId: 'retro-correction', country: 'NL' });
   await post('/api/answer', { questionId: 'leaver-bonus', country: 'DE' });
   await post('/api/answer', { questionId: 'leaver-bonus', country: 'DE' });
-  const j = await (await fetch(base + '/api/gaps')).json();
+  const j = await (await fetch((await ready) + '/api/gaps')).json();
   const top = j.ranked[0];
   assert.equal(top.questionId, 'leaver-bonus');
   assert.equal(top.country, 'DE');
@@ -58,19 +58,19 @@ test('GET /api/gaps logs non-reliable answers only', async () => {
 });
 
 test('unknown route returns 404', async () => {
-  assert.equal((await fetch(base + '/nope')).status, 404);
+  assert.equal((await fetch((await ready) + '/nope')).status, 404);
 });
 
 test('GET /api/documents lists corpus files without bodies', async () => {
-  const j = await (await fetch(base + '/api/documents')).json();
+  const j = await (await fetch((await ready) + '/api/documents')).json();
   assert.equal(j.length, 11);
   assert.ok(j.every(d => d.body === undefined));
 });
 
 test('GET /api/documents/:file returns the source text; unknown file is 404', async () => {
-  const j = await (await fetch(base + '/api/documents/payroll-manual-v7.md')).json();
+  const j = await (await fetch((await ready) + '/api/documents/payroll-manual-v7.md')).json();
   assert.match(j.body, /pro rata by months worked/);
-  assert.equal((await fetch(base + '/api/documents/..%2Fpackage.json')).status, 404);
+  assert.equal((await fetch((await ready) + '/api/documents/..%2Fpackage.json')).status, 404);
 });
 
 test('answers point back to their source file', async () => {
@@ -85,4 +85,11 @@ test('oversized body returns 413', async () => {
 
 test('non-object body returns 400', async () => {
   assert.equal((await post('/api/answer', '[1,2]')).status, 400);
+});
+
+test('shut down', async () => {
+  await ready;
+  server.closeAllConnections?.();
+  server.close();
+  server.db.close();
 });

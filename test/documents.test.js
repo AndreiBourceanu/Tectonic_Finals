@@ -8,7 +8,7 @@ function start(opts = {}) {
   const server = createServer({ now: '2026-09', db: openDb(':memory:'), ...opts });
   return new Promise(r => server.listen(0, () => r({ server, base: `http://127.0.0.1:${server.address().port}` })));
 }
-const stop = ({ server }) => { server.close(); server.db.close(); };
+const stop = ({ server }) => { server.closeAllConnections?.(); server.close(); server.db.close(); };
 const call = (base, method, p, body, headers = {}) => fetch(base + p, {
   method, headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body)
 });

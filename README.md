@@ -8,11 +8,14 @@ The data lives in a real SQLite database. The demo data is fictional: a company 
 
 ## Quick start
 
-Requires **Node >= 22.13**. No dependencies and no `npm install`: the database is Node's built-in `node:sqlite`.
+Works on **Node 18.18 or newer** (check with `node --version`).
+
+- **Node 22.13+:** uses the built-in `node:sqlite`. No install needed.
+- **Node 18 or 20:** run `npm install` once. It installs `better-sqlite3`, an optional dependency used as the SQLite driver. The app picks the driver automatically, and `/api/health` reports which one is active.
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 37 tests (node:test, in-memory databases)
+npm test             # 38 tests (node:test, in-memory databases)
 npm run demo         # scripted CLI demo: good / conflict / gap / gap closed live
 npm run reseed       # delete the database file and load the demo data again
 ```
@@ -24,6 +27,7 @@ npm run reseed       # delete the database file and load the demo data again
 | `ADMIN_TOKEN` | unset | when set, write routes require `Authorization: Bearer <token>` |
 | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
 | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
+| `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
 
 ## How everything works
 
@@ -52,7 +56,7 @@ Because every answer is computed from the database on request, **changes are liv
 
 ### 2. The database (`src/db.js`)
 
-SQLite in WAL mode with foreign keys on. The schema is an append-only list of migrations; the applied version is stored in `PRAGMA user_version`, so opening an old database upgrades it automatically.
+SQLite in WAL mode with foreign keys on. The two drivers (built-in `node:sqlite` and `better-sqlite3`) expose the same calls, so `src/repo.js` doesn't know which one is in use. The schema is an append-only list of migrations; the applied version is stored in `PRAGMA user_version`, so opening an old database upgrades it automatically.
 
 | Table | Holds |
 |---|---|
@@ -159,7 +163,7 @@ Run `npm run demo` to see all four in the terminal.
 ```
 data/seed.json       fictional demo data (questions, documents with full text)
 data/trustlens.db    the database (created on first run, ignored by git)
-src/db.js            connection and migrations
+src/db.js            driver selection, connection and migrations
 src/repo.js          all SQL, validation and transactions
 src/seed.js          loads demo data into an empty database
 src/trust.js         scoring and verdict logic
@@ -185,4 +189,5 @@ demo/demo.js         scripted CLI demo
 - Scores are transparent heuristics, not calibrated against real outcomes.
 - One shared admin token, no per-user accounts or permissions.
 - SQLite fits a single server. Multiple servers would need PostgreSQL.
-- `ExperimentalWarning`: Node marks `node:sqlite` as experimental; the npm scripts hide the warning.
+- Node marks `node:sqlite` as experimental. The app hides that one warning when it starts, and `better-sqlite3` is the fallback if that API changes.
+- Tests were run on Node 18.18 (with `better-sqlite3`) and Node 22 (with `node:sqlite`).
