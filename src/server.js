@@ -9,6 +9,7 @@ const { load: loadEnv } = require('./env');
 const { openDb, driverName } = require('./db');
 const { createRepo, HttpError } = require('./repo');
 const { seedIfEmpty } = require('./seed');
+const { ask, draft } = require('./ask');
 
 const INDEX = path.join(__dirname, '..', 'public', 'index.html');
 
@@ -84,6 +85,15 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
           const body = await readJson(req, 500_000);
           return send(res, 200, repo.updateDocument(file, body, String(body.editedBy || 'api').slice(0, 80)));
         }
+      }
+      if (m === 'POST' && r1 === 'ask' && parts.length === 2) { // the search bar: { query, country, useLlm }
+        const body = await readJson(req);
+        const codes = repo.countryCodes();
+        return send(res, 200, await ask({ repo, llm, query: body.query, country: String(body.country || '').toUpperCase(), useLlm: body.useLlm === true, now: today(), codes }));
+      }
+      if (m === 'POST' && r1 === 'draft' && parts.length === 2) { // second model call: short answer from the strongest sources
+        const body = await readJson(req);
+        return send(res, 200, await draft({ repo, llm, query: body.query, country: String(body.country || '').toUpperCase(), now: today(), codes: repo.countryCodes() }));
       }
       if (m === 'GET' && r1 === 'search' && parts.length === 2) return send(res, 200, repo.search(url.searchParams.get('q') || ''));
       if (r1 === 'countries') {

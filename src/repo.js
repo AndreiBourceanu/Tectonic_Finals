@@ -330,8 +330,17 @@ function createRepo(db) {
     }
   }
 
+  // Documents sharing words with the query, with how many distinct words matched.
+  function wordHits(q, limit) {
+    const toks = [...new Set(tokenize(q))].slice(0, 12);
+    if (!toks.length) return [];
+    const ph = toks.map(() => '?').join(',');
+    return all(`SELECT d.file, COUNT(DISTINCT k.keyword) AS n FROM document_keywords k JOIN documents d ON d.id = k.document_id
+                WHERE k.keyword IN (${ph}) GROUP BY d.id ORDER BY n DESC, SUM(k.weight) DESC, d.file LIMIT ?`, ...toks, limit).map(r => ({ file: r.file, n: r.n }));
+  }
+
   // Simulated search: the LLM question routing will replace this. Matches question text and document keywords.
-  function search(q) {
+  function search(q, limit = 8) {
     const toks = [...new Set(tokenize(q))].slice(0, 12);
     if (!toks.length) return { query: q, questions: [], documents: [] };
     const ph = toks.map(() => '?').join(',');
@@ -344,9 +353,44 @@ function createRepo(db) {
     }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
     const documents = all(
       `SELECT d.file FROM document_keywords k JOIN documents d ON d.id = k.document_id WHERE k.keyword IN (${ph})
-       GROUP BY d.id ORDER BY COUNT(DISTINCT k.keyword) DESC, SUM(k.weight) DESC, d.file LIMIT 8`, ...toks).map(r => getMeta(r.file));
+       GROUP BY d.id ORDER BY COUNT(DISTINCT k.keyword) DESC, SUM(k.weight) DESC, d.file LIMIT ?`, ...toks, limit).map(r => getMeta(r.file));
     return { query: q, questions, documents };
   }
+
+  // Retrieval for the search bar: the local word match, plus (when given) what the LLM understood.
+  // ai = { keywords, people, questionId } is already validated against our tables. Every document says why it matched.
+  function retrieve(q, ai = null, limit = 10) {
+    const found = new Map(); // file -> { strength, via }
+    const add = (file, via, points) => {
+      if (!found.has(file)) found.set(file, { file, strength: 0, via: new Set() });
+      const f = found.get(file); f.strength += points; f.via.add(via);
+    };
+    for (const h of wordHits(q, 20)) add(h.file, 'words', h.n);
+    // Words shared with a stored question's text or a document's title count double: they say what it is about.
+    const toks = [...new Set(tokenize(q))].slice(0, 12);
+    for (const x of all('SELECT id, text FROM questions')) {
+      const qt = new Set(tokenize(x.text)), n = toks.filter(t => qt.has(t)).length;
+      if (n) for (const r of all('SELECT file FROM documents WHERE topic = ?', x.id)) add(r.file, 'question', n * 2);
+    }
+    for (const t of toks) for (const r of all('SELECT file FROM documents WHERE instr(lower(title), ?) > 0', t)) add(r.file, 'title', 2);
+    if (ai) {
+      if (ai.keywords?.length) {
+        const ph = ai.keywords.map(() => '?').join(',');
+        for (const r of all(`SELECT d.file, COUNT(DISTINCT k.keyword) AS n FROM document_keywords k JOIN documents d ON d.id = k.document_id
+                             WHERE k.keyword IN (${ph}) GROUP BY d.id ORDER BY n DESC, d.file LIMIT 20`, ...ai.keywords)) add(r.file, 'keyword', r.n);
+      }
+      if (ai.people?.length) {
+        const ph = ai.people.map(() => '?').join(',');
+        for (const r of all(`SELECT d.file FROM documents d JOIN people p ON p.id = d.owner_id WHERE p.name COLLATE NOCASE IN (${ph}) ORDER BY d.file`, ...ai.people)) add(r.file, 'person', 2);
+      }
+      // The model recognised a stored question: its documents are the answer, so they outweigh stray keyword hits.
+      if (ai.questionId) for (const r of all('SELECT file FROM documents WHERE topic = ? ORDER BY file', ai.questionId)) add(r.file, 'question', 5);
+    }
+    const ranked = [...found.values()].sort((a, b) => b.strength - a.strength || a.file.localeCompare(b.file)).slice(0, limit);
+    return ranked.map(x => ({ ...getMeta(x.file), via: [...x.via], strength: x.strength }));
+  }
+
+  const getQuestion = id => one('SELECT id, text, expert FROM questions WHERE id = ?', id) || null;
 
   function documentVersions(file) {
     const row = one('SELECT id FROM documents WHERE file = ?', file);
@@ -380,7 +424,7 @@ function createRepo(db) {
   return {
     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
-    saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, documentVersions, logAnswer, gapReport
+    saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, retrieve, getQuestion, documentVersions, logAnswer, gapReport
   };
 }
 

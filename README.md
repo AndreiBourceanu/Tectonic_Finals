@@ -119,7 +119,9 @@ A plain Node `http` server with no framework.
 | PUT | `/api/documents/:file` | update a document; provided fields are merged, the version number goes up |
 | GET | `/api/documents/:file/versions` | version history, newest first, with who edited |
 | POST | `/api/upload` | upload a new file or a new version of one (email required) |
-| GET | `/api/search?q=` | simulated search over questions and keywords |
+| POST | `/api/ask` | the search bar. Body `{query, country, useLlm}`. Returns `answers` (one verdict per question or standalone document, each with scored sources), `found`, `llmAvailable` and `llm: {used, model, error, cached, keywords, people, question}` |
+| POST | `/api/draft` | body `{query, country}`. Second model call: a short drafted answer from the strongest sources. Returns `{draft: {answer, covered, sources, model, cached} \| null, reason}`; `reason` is `disabled`, `no-source` or `error` |
+| GET | `/api/search?q=` | plain keyword match over questions and documents (used internally and kept for API users) |
 | GET | `/api/countries` | countries in use |
 | POST | `/api/countries` | body `{country}` (name or ISO code); adds a real country, `201` if new, `200` if it already existed, `400` if not a country |
 | GET | `/api/countries/iso` | all 249 ISO 3166-1 countries (for suggestions) |
@@ -157,7 +159,7 @@ The home page has a **search bar** with a country selector, and an **Add or upda
 - **Type:** the Type field is free text with the stored types as suggestions. An unknown type is added to the `document_types` table the first time it is used (the confirmation says so). Matching ignores case and extra spaces, so "meeting NOTES" reuses "Meeting notes". Types are 1 to 40 characters (letters, digits, spaces, `& / . -`). On an update, leaving the type empty keeps the current one.
 - **Keywords (optional):** the upload form has one Keywords field (comma separated). Manual keywords are added to the generated ones and ranked first. Every keyword is stored once in the global `keywords` table, so a new keyword is added the first time anyone uses it, and the form lists existing keywords as clickable suggestions. Manual keywords are kept when a document is updated without new keywords; giving new ones replaces the manual set. The upload response lists what was new to the database (`added.type`, `added.keywords`).
 - **Question links:** the upload form no longer links a document to a question. Uploaded documents are searchable by their keywords but do not take part in a trust verdict yet; the API (`topic`, `answer`, `claim` on `POST /api/upload` and `/api/documents`) still supports it, and the LLM step is meant to do this automatically.
-- **Search (`GET /api/search?q=`):** simulated. It matches the words against question texts and stored keywords and returns matching questions and documents. Opening a question shows the trust verdict. This is the part an LLM question-routing step replaces.
+- **Search:** see 5e below.
 
 ### 5d. LLM integration (Gemini)
 
@@ -171,13 +173,29 @@ Tests and the demo never call Gemini: the LLM client is only created when the se
 
 Data: with a free-tier key, Google's terms allow prompts to be used to improve its products. Use only fictional or non-confidential documents, or a billing-enabled project. The model is not used for search routing yet.
 
+### 5e. Search (`src/ask.js`, `POST /api/ask`)
+
+The LLM interprets the question; it never scores anything.
+
+1. **Quick local match (`useLlm: false`).** The words of the query are matched against stored keywords. The page shows this at once.
+2. **Interpretation (`useLlm: true`).** The server sends the query plus our vocabulary (up to 400 keywords, the people with their roles, the stored questions) and asks for the most likely keywords, people and stored question. The model may only copy entries from those lists. Anything else it returns is dropped (`sanitizeQuery`). The query is treated as untrusted data.
+3. **Retrieval (`repo.retrieve`).** Documents are fetched locally from the query words (matched against keywords, with double weight for words in a stored question or a document title), the model's keywords, the owners it named and the stored question it picked. A document matched in several ways ranks higher.
+4. **Scoring (`trust.js`).** Documents that belong to a stored question are scored together with all other documents of that question, so agreement and conflicts are found. A document with no question stands alone, so nothing can confirm it (`agreed` stays 0). Each group gets a verdict, a conflict banner and "who can help" (a standalone document points to its owner).
+5. **Order.** Most relevant group first; trust only breaks ties, otherwise a loosely related but trusted answer would beat the one that was asked. Only groups about as relevant as the best one are kept (a single shared word is not enough), at most 3.
+
+6. **Draft answer (`POST /api/draft`, `ask.draft`).** A second, separate model call. The server re-runs the search (the interpretation is cached, so it is not paid twice), then takes the strongest sources **that apply to the selected country**: up to 3 from the best group and 1 from each other group, 4 at most, sorted by trust. Their full text (6,000 characters each, 16,000 in total) is attached to the prompt together with title, date, owner, countries and trust score. The model returns `{answer, sources, covered}`: at most three sentences, in the language of the question, using only facts in the documents, naming a conflict when documents disagree, and saying `covered: false` when the documents do not answer. Citation numbers are checked against the documents actually sent. If no source applies to the country, the model is not called. The draft is cached (query, country and document versions), appears in its own box above the scored sources, and is labelled as written by the model. The trust verdict and scores stay the authority: the model writes text, it never scores. A failure only hides the box.
+
+The heading of the result is **the user's own query**: a stored question is only how documents are grouped for scoring. When several groups match, each gets a small "About: …" line naming its topic or document.
+
+The page shows step 1 immediately ("Refining with Gemini…"), then replaces it with step 4's result and a line saying what the model understood. If the model is off, slow or fails, the quick results stay, with the reason shown, so search never depends on the LLM. Interpretations are cached in memory (50 entries, keyed by the query and the size of the vocabulary), so a repeated question does not call the model again. The country always comes from the selector, never from the model. Only the quick search is written to the gap log, and only for the top answer when it is a stored question that is not "rely".
+
 ### 5c. Countries
 
 `src/countries.js` holds the official ISO 3166-1 list and resolves what the user types (name, code, accents, a few aliases). `repo.addCountry()` stores only resolved countries. Document validation and `/api/answer` check against the `countries` table, so a country must be added before it can be used.
 
 ### 6. The UI (`public/index.html`)
 
-A single page with no build step. It loads the questions from the API, then on every change calls `POST /api/answer` and renders:
+A single page with no build step. The search bar calls `POST /api/ask` (quick result first, then the Gemini-refined one); the suggested-question chips call `POST /api/answer`. Both render:
 
 - the verdict card (colour, answer, based-on source and score, conflict banner, who can help);
 - the ranked sources, each with four tappable score bars that show *why*;
@@ -204,6 +222,7 @@ Run `npm run demo` to see all four in the terminal.
 - `llm.test.js`, `env.test.js`: the Gemini client against mocked responses (both API routes, failures, retries, timeouts, key never leaked), prompt-injection guard, env file parsing, upload with a stubbed model, no model call for invalid or duplicate uploads.
 - `countries.test.js`: the ISO list, resolving names and codes, rejecting invented countries, using a new country, email to people record.
 - `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
+- `ask.test.js`: closed-vocabulary check, query prompt, search without and with the model (stubbed), model failure, cache, standalone documents, relevance order, gap log, and the draft step (which sources are sent, only those applying to the country, no call when none apply, failure, cache, prompt caps and injection guard, citation validation).
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
 
 ## Project layout
@@ -214,7 +233,8 @@ data/trustlens.db    the database (created on first run, ignored by git)
 src/db.js            driver selection, connection and migrations
 src/repo.js          all SQL, validation and transactions
 src/countries.js     ISO 3166-1 country list and name/code resolver
-src/llm.js           Gemini client (JSON output, validation, fallback)
+src/llm.js           Gemini client (document analysis, query interpretation, validation)
+src/ask.js           search bar: interpretation, retrieval, grouping, scoring and the drafted answer
 src/env.js           .env / *.env loader
 src/metadata.js      built-in fallback for summary/keywords
 scripts/llm-check.js checks the Gemini key
@@ -239,7 +259,9 @@ demo/demo.js         scripted CLI demo
 
 - The demo data is fictional and small.
 - `claim` labels are provided by hand, so conflict detection is only as good as those labels.
-- The LLM only fills metadata on upload. Search is still keyword-based, and the model does not yet extract claims or link documents to questions.
+- The LLM fills metadata on upload and interprets search queries. It does not yet extract claims or link documents to questions, so an uploaded document is scored alone (no agreement or conflict) until someone gives it a topic and claim through the API.
+- The drafted answer is only as good as the attached text: long documents are cut at 6,000 characters, and a model can still misread a source. That is why it cites its sources and sits next to the trust scores.
+- Search quality depends on the keywords stored. With thousands of keywords the list sent to the model would need pre-filtering.
 - Scores are transparent heuristics, not calibrated against real outcomes.
 - No authentication: no accounts, permissions or email verification, and all write routes are open.
 - Uploads are limited to `.md`/`.txt` files of about 200 KB. No PDF or Word parsing yet.

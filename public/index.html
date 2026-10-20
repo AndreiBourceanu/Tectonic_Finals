@@ -49,6 +49,13 @@ pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;backg
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .field{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:.9rem;margin-bottom:12px}
 [hidden]{display:none!important}
+.sep{border:0;border-top:1px solid var(--line,#ddd);margin:26px 0}
+h3.sub{font-size:1rem;margin:14px 0 8px}
+.draft{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;padding:14px 16px;margin:14px 0}
+.draft .lab{font-size:.8rem;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.draft .txt{font-size:1.05rem;line-height:1.5}
+.draft .src{font-size:.85rem;color:var(--mute);margin-top:8px}
+.draft.miss{border-left-color:var(--mid)}
 .field small{font-weight:400;color:var(--mute)}
 .row{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px}
 .row label{font-weight:400;display:flex;gap:6px;align-items:center}
@@ -71,6 +78,8 @@ footer{margin-top:28px;color:var(--mute);font-size:.85rem}
 </form>
 <div class="chips" id="sugg" aria-label="Suggested questions"></div>
 <div id="results" aria-live="polite"></div>
+<div id="qhead"></div>
+<div id="draft" aria-live="polite"></div>
 <div id="answer" aria-live="polite"></div>
 
 <h2 id="upl">Add or update a document</h2>
@@ -121,39 +130,84 @@ function docCard(d){
  <div class="mute" style="font-size:.85rem">${d.owner?'Owner: '+esc(d.owner):'No owner'} · updated ${esc(d.date)} · applies to ${esc(d.countries.join(', '))}</div>
  <button type="button" class="link" data-open="${esc(d.file)}">${S.shown[d.file]?'Hide':'Open'} source file</button>${S.shown[d.file]?'<pre class="file">'+esc(S.texts[d.file])+'</pre>':''}</div>`;
 }
-async function search(q){
- const box=$('results');$('answer').innerHTML='';S.qid=null;
- try{
-  const r=await api('/api/search?q='+encodeURIComponent(q));
-  S.last=r;
-  let h='';
-  if(r.questions.length){h+='<h2>Questions we can answer</h2>'+r.questions.map(x=>`<button type="button" class="qbtn" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('')}
-  if(r.documents.length){h+='<h2>Matching documents</h2>'+r.documents.map(docCard).join('')}
-  if(!h)h='<div class="banner"><strong>Nothing found.</strong> No document matches these words. That is a knowledge gap: try other words, or add a document below.</div>';
-  box.innerHTML=h;
-  const[a,b]=r.questions;if(a&&(!b||a.score>=b.score*1.5))showAnswer(a.id); // open automatically when one question clearly leads
- }catch(e){box.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+function viaText(d){
+ const w=[];
+ if(d.keywords.length)w.push('keywords '+d.keywords.map(k=>'<span class="kw">'+esc(k)+'</span>').join(' '));
+ if(d.people.length)w.push('people '+d.people.map(esc).join(', '));
+ if(d.question)w.push('topic “'+esc(d.question)+'”');
+ return w.join(' · ');
 }
-function rerenderDocs(){if(S.last)search($('q').value.trim())}
+function askNote(r){
+ if(S.refining)return '<div class="mute" role="status">Refining with Gemini… the results below are a quick keyword match.</div>';
+ if(r.llm.used)return `<div class="mute">Understood by ${esc(r.llm.model)}${r.llm.cached?' (cached)':''}: ${viaText(r.llm)||'no extra terms'}. Documents were fetched and scored locally.</div>`;
+ if(r.llm.error)return `<div class="mute">Gemini unavailable (${esc(r.llm.error)}). Showing the keyword match, scored the same way.</div>`;
+ return '';
+}
+function renderAsk(){
+ const r=S.ask;if(!r)return;S.mode='ask';
+ $('results').innerHTML=askNote(r);$('qhead').innerHTML='';
+ if(!r.answers.length){
+  $('answer').innerHTML=S.refining?'':'<div class="banner"><strong>Nothing found.</strong> No document matches this question. That is a knowledge gap: try other words, or add a document below.</div>';
+  return;
+ }
+ // The user's query is the question. A stored question or document title is only how sources were grouped, shown when there are several groups.
+ const many=r.answers.length>1;
+ $('qhead').innerHTML=`<h2>${esc(r.query)} <span class="tag">${esc(r.country)}</span></h2>`;
+ $('answer').innerHTML=r.answers.map((a,i)=>renderAnswer(a,'a'+i,i===0,many?`<h3 class="sub">${i+1}. About: ${esc(a.question)}</h3>`:'')).join('<hr class="sep">');
+}
+function renderDraft(r){
+ const el=$('draft');
+ if(!r||!r.draft){el.innerHTML=r&&r.reason==='error'?`<div class="mute">Draft answer unavailable (${esc(r.error)}). The scored sources below are unaffected.</div>`:'';return}
+ const d=r.draft,cites=d.sources.length?d.sources:[];
+ el.innerHTML=`<div class="draft ${d.covered?'':'miss'}"><div class="lab">Draft answer · written by ${esc(d.model)}${d.cached?' (cached)':''}</div>
+ <div class="txt">${esc(d.answer)}</div>
+ <div class="src">${d.covered?'':'The documents do not fully answer this. '}${cites.length?'Based on '+cites.map(c=>`[${c.n}] ${esc(c.title)} (trust ${c.trust}/100)`).join(', ')+'. ':''}Drafted from the full text of the strongest sources that apply to ${esc($('c').value)}. The verdict and scores below decide how far to rely on it.</div></div>`;
+}
+async function draftFor(q,country,id){
+ $('draft').innerHTML='<div class="mute" role="status">Drafting an answer from the strongest sources…</div>';
+ let r=null;
+ try{r=await api('/api/draft',{query:q,country})}catch(e){r={draft:null,reason:'error',error:e.message}}
+ if(id===S.req)renderDraft(r);
+}
+async function search(q){
+ const id=S.req=(S.req||0)+1,country=$('c').value;
+ S.qid=null;S.refining=false;
+ $('results').innerHTML='<div class="mute" role="status">Searching…</div>';$('answer').innerHTML='';$('draft').innerHTML='';$('qhead').innerHTML='';
+ try{
+  let r=await api('/api/ask',{query:q,country,useLlm:false});
+  if(id!==S.req)return;
+  S.ask=r;S.q=q;S.refining=r.llmAvailable;renderAsk();
+  if(!r.llmAvailable)return;
+  try{r=await api('/api/ask',{query:q,country,useLlm:true})}
+  catch(e){if(id!==S.req)return;S.refining=false;renderAsk();draftFor(q,country,id);return}
+  if(id!==S.req)return;
+  S.ask=r;S.refining=false;S.noScroll=true;renderAsk();S.noScroll=false;
+  if(r.answers.length)draftFor(q,country,id);
+ }catch(e){if(id===S.req){S.refining=false;$('results').innerHTML=`<div class="banner">${esc(e.message)}</div>`}}
+}
 
 /* ---------- verdict ---------- */
-async function showAnswer(id){
- S.qid=id;let d;
- try{d=await api('/api/answer',{questionId:id,country:$('c').value})}
- catch(e){$('answer').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
- let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2><div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
+function renderAnswer(d,tag,first,head){
+ let h=(head===undefined?`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2>`:head)+`<div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
  if(d.basedOn)h+=`<div>Based on <strong>${esc(d.basedOn.title)}</strong>, trust score <strong>${d.basedOn.score}/100</strong>.</div>`;
  if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. The first has the stronger evidence, yet someone should confirm.</div>`;
  if(d.expert)h+=`<div class="next"><strong>Who can help:</strong> ${esc(d.expert)}</div>`;
- h+='</div><h2>Sources, ranked. Tap a bar to see why.</h2>';
+ h+=`</div><h3 class="sub">${first?'Sources, ranked. Tap a bar to see why.':'Sources, ranked.'}</h3>`;
  d.sources.forEach((s,i)=>{
-  const key=d.questionId+i+d.country,sel=S.open[key]||'applies',r=s.score;
+  const key=tag+d.questionId+i+d.country,sel=S.open[key]||'applies',r=s.score;
   const seg=SEGS.map(([k,l,m])=>`<button type="button" data-bar="${esc(key)}|${k}" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
   h+=`<div class="card src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div class="mute">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button type="button" class="link" data-open="${esc(s.file)}">${S.shown[s.file]?'Hide':'Open'} source file</button>${S.shown[s.file]?'<pre class="file">'+esc(S.texts[s.file])+'</pre>':''}</div>`;
  });
- $('answer').innerHTML=h;
+ return h;
+}
+async function showAnswer(id){
+ S.qid=id;S.mode='q';S.req=(S.req||0)+1;$('results').innerHTML='';$('draft').innerHTML='';$('qhead').innerHTML='';let d;
+ try{d=await api('/api/answer',{questionId:id,country:$('c').value})}
+ catch(e){$('answer').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
+ $('answer').innerHTML=renderAnswer(d,'q',true);
  if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});
 }
+function rerender(){return S.mode==='ask'?Promise.resolve(renderAsk()):(S.qid?showAnswer(S.qid):Promise.resolve())}
 
 /* ---------- upload / update ---------- */
 function mode(){return document.querySelector('input[name=mode]:checked').value}
@@ -258,18 +312,17 @@ document.addEventListener('click',async e=>{
  const t=e.target.closest('[data-q],[data-open],[data-bar],[data-kw]');if(!t)return;
  if(t.dataset.kw){const cur=$('kwin').value.split(',').map(x=>x.trim()).filter(Boolean);if(!cur.includes(t.dataset.kw))cur.push(t.dataset.kw);$('kwin').value=cur.join(', ')}
  else if(t.dataset.q){showAnswer(t.dataset.q)}
- else if(t.dataset.bar){const[k,b]=t.dataset.bar.split('|');S.open[k]=b;S.noScroll=true;await showAnswer(S.qid);S.noScroll=false}
+ else if(t.dataset.bar){const[k,b]=t.dataset.bar.split('|');S.open[k]=b;S.noScroll=true;await rerender();S.noScroll=false}
  else if(t.dataset.open){
   const f=t.dataset.open;
   try{if(S.texts[f]===undefined)S.texts[f]=(await api('/api/documents/'+encodeURIComponent(f))).body}catch(x){S.texts[f]='Could not load: '+x.message}
   S.shown[f]=!S.shown[f];S.noScroll=true;
-  if(S.qid)await showAnswer(S.qid);
-  if(S.last)await search($('q').value.trim());
+  await rerender();
   $('libbody').innerHTML=S.docs.map(docCard).join('');S.noScroll=false;
  }
 });
-$('sf').addEventListener('submit',e=>{e.preventDefault();const q=$('q').value.trim();if(q)search(q);else $('results').innerHTML='<div class="mute">Type a question, or pick one of the suggestions.</div>'});
-$('c').addEventListener('change',()=>{if(S.qid){S.noScroll=true;showAnswer(S.qid).then(()=>{S.noScroll=false})}});
+$('sf').addEventListener('submit',e=>{e.preventDefault();const q=$('q').value.trim();if(q)search(q);else{S.req=(S.req||0)+1;$('answer').innerHTML='';$('draft').innerHTML='';$('qhead').innerHTML='';$('results').innerHTML='<div class="mute">Type a question, or pick one of the suggestions.</div>'}});
+$('c').addEventListener('change',()=>{if(S.mode==='ask'&&S.q){search(S.q)}else if(S.qid){S.noScroll=true;showAnswer(S.qid).then(()=>{S.noScroll=false})}});
 $('uf').addEventListener('submit',upload);
 $('uf').addEventListener('change',e=>{if(e.target.name==='mode')syncForm()});
 $('cbtn').onclick=addCountry;
