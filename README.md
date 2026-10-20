@@ -8,7 +8,7 @@ The data lives in a real SQLite database. The demo data is fictional: a company 
 
 ## Quick start
 
-Requires **Node >= 22.13**. No dependencies and no `npm install`: the database is Node's built-in `node:sqlite`.
+Requires **Node >= 22.13**. No dependencies and no `npm install`: the database is Node's built-in `node:sqlite`. 
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
