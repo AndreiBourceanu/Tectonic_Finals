@@ -4,13 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { answer, MAX } = require('./trust');
 const { ISO } = require('./countries');
+const { createLlm } = require('./llm');
+const { load: loadEnv } = require('./env');
 const { openDb, driverName } = require('./db');
 const { createRepo, HttpError } = require('./repo');
 const { seedIfEmpty } = require('./seed');
 
 const INDEX = path.join(__dirname, '..', 'public', 'index.html');
 
-function createServer({ now, db = openDb() } = {}) {
+// llm: a client from createLlm(). Off by default, so tests and demos never call an external API.
+function createServer({ now, db = openDb(), llm = null } = {}) {
   const repo = createRepo(db);
   if (process.env.SEED_DEMO !== 'false') seedIfEmpty(repo); // demo data only when the DB is empty
   repo.backfillMetadata();
@@ -94,8 +97,15 @@ function createServer({ now, db = openDb() } = {}) {
       if (m === 'GET' && r1 === 'types' && parts.length === 2) return send(res, 200, repo.listTypes());
       if (m === 'GET' && r1 === 'keywords' && parts.length === 2) return send(res, 200, repo.listKeywords(Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit'), 10) || 40))));
       if (m === 'POST' && r1 === 'upload' && parts.length === 2) {
-        const result = repo.saveUpload(await readJson(req, 500_000));
-        return send(res, result.action === 'created' ? 201 : 200, result);
+        const body = await readJson(req, 500_000);
+        repo.checkUpload(body);                       // validate first: invalid uploads never reach the LLM
+        let ai = null, llmError = null;
+        if (llm && llm.enabled()) {                   // network call happens outside any database transaction
+          const r = await llm.analyzeDocument({ title: body.title, fileName: body.fileName, text: body.content, types: repo.listTypes() });
+          if (r.ok) ai = r.ai; else { llmError = r.error; console.warn(`LLM unavailable, using the built-in fallback: ${r.detail || r.error}`); }
+        }
+        const result = repo.saveUpload(body, { ai });
+        return send(res, result.action === 'created' ? 201 : 200, { ...result, llm: { used: !!ai, model: ai ? llm.model : null, error: llmError } });
       }
       if (m === 'GET' && r1 === 'people' && parts.length === 2) return send(res, 200, repo.listPeople());
       if (m === 'GET' && r1 === 'gaps' && parts.length === 2) return send(res, 200, repo.gapReport());
@@ -112,8 +122,13 @@ function createServer({ now, db = openDb() } = {}) {
 }
 
 if (require.main === module) {
+  loadEnv(); // reads .env / *.env from the project folder (never printed)
   const port = process.env.PORT || 3000;
-  createServer().listen(port, () => console.log(`Trust Lens running on http://localhost:${port}`));
+  const llm = createLlm();
+  createServer({ llm }).listen(port, () => {
+    console.log(`Trust Lens running on http://localhost:${port}`);
+    console.log(llm.enabled() ? `LLM: Gemini (${llm.model})` : 'LLM: off (no GEMINI_API_KEY found), using the built-in fallback');
+  });
 }
 
 module.exports = { createServer };
