@@ -1,0 +1,1806 @@
+From 4ac06799c34d22f1a2df32b2905ba91ad83179a1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 13:51:34 +0200
+Subject: [PATCH 1/2] Keep it trusted without becoming another task (finals)
+
+- Claude layer (src/ai.js): free-text questions (/api/ask), automatic
+  classification of connector content (/api/ingest), semantic agreement
+  between sources, summaries; transparent keyword fallback without a key
+- Who really knows (src/expertise.js): expertise learned from work signals
+  (chat answers, tickets, commits, edits, confirmations) that fade with time
+- Steward (src/steward.js): background sweep with an attention budget,
+  one-click checks (conflict, handover, still correct?, publish chat answer),
+  HR role-change webhook, expert replies captured as draft sources
+- Freshness counts from the last one-click confirmation; an owner who left
+  the role no longer counts as accountable
+- Schema v2: verification, lifecycle, signals, verifications, activity
+- Calm UI: discreet green answer, one-click checks, behind-the-scenes log,
+  simulated Teams reply and connector events
+- 7 new tests (45 total), extended CLI demo, README cleaned (merge leftover)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01E34p4tMnXfkHjdXtc98yJS
+---
+ README.md           |  85 ++++++++++++++++++--
+ data/seed.json      | 141 +++++++++++++++++++++++++++++++++
+ demo/demo.js        |  46 ++++++++++-
+ public/index.html   |  91 +++++++++++++++++++--
+ src/ai.js           | 143 +++++++++++++++++++++++++++++++++
+ src/db.js           |  44 +++++++++++
+ src/expertise.js    |  75 ++++++++++++++++++
+ src/repo.js         |  79 ++++++++++++++++--
+ src/seed.js         |   2 +
+ src/server.js       | 114 +++++++++++++++++++++++---
+ src/steward.js      | 189 ++++++++++++++++++++++++++++++++++++++++++++
+ src/trust.js        |  28 ++++---
+ test/db.test.js     |   2 +-
+ test/finals.test.js | 142 +++++++++++++++++++++++++++++++++
+ 14 files changed, 1143 insertions(+), 38 deletions(-)
+ create mode 100644 src/ai.js
+ create mode 100644 src/expertise.js
+ create mode 100644 src/steward.js
+ create mode 100644 test/finals.test.js
+
+diff --git a/README.md b/README.md
+index e382797..8ce1d11 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ # Trust Lens
+ 
+-Trust Lens is the bridge between the customer organisation's search engine/AI and its users.
++Trust Lens is the bridge between the customer organisation's search engine/AI and its users. **It keeps itself trusted without becoming another task**: it reads new content, learns who really knows what from everyday work, reacts to role changes, and only asks a person for one click when their judgement actually adds value.
+ 
+ Answers with visible trust. For every question, Trust Lens finds the relevant company documents, scores each one on **freshness, ownership, applicability and agreement**, and tells you whether you can rely on the answer, should check first, or should not act yet. It surfaces conflicts between sources, flags knowledge gaps, and names who to ask.
+ 
+@@ -15,8 +15,8 @@ Works on **Node 18.18 or newer** (check with `node --version`).
+ 
+ ```bash
+ npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
+-npm test             # 52 tests (node:test, in-memory databases)
+-npm run demo         # scripted CLI demo: good / conflict / gap / gap closed live
++npm test             # 59 tests (node:test, in-memory databases, no network)
++npm run demo         # scripted CLI demo: good / conflict / gap, then the finals story (checks, HR event, expert answer, connector)
+ npm run reseed       # delete the database file and load the demo data again
+ ```
+ 
+@@ -27,6 +27,9 @@ npm run reseed       # delete the database file and load the demo data again
+ | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
+ | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
+ | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
++| `ANTHROPIC_API_KEY` | unset | when set, Claude reads content, routes free-text questions and judges agreement |
++| `TRUST_AI_MODEL` | `claude-haiku-5-5` | Claude model used by `src/ai.js` |
++| `TRUST_AI` | on | set to `off` to force the local keyword fallback (tests do this) |
+ 
+ ## How everything works
+ 
+@@ -186,6 +189,71 @@ Run `npm run demo` to see all four in the terminal.
+ - `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
+ - `api.test.js`: read endpoints, input validation, size limits, 404s.
+ 
++## Keep it trusted (finals: "Can your solution stay trusted without becoming another task?")
++
++The goal is not zero human involvement, it is zero unnecessary effort. Each question of the challenge maps to a mechanism in the code.
++
++### 1. What happens automatically?
++
++| Signal from existing tools | What Trust Lens does on its own | Code |
++|---|---|---|
++| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Claude reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
++| An employee types a question in their own words (`POST /api/ask`) | Claude routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
++| Everyday work: chat answers, resolved tickets, commits, edits, ownership, one-click confirmations | Builds the **who really knows this** ranking. Every trace fades with a 6-month half-life, so people who moved on stop being suggested without anyone updating a skills matrix. Every suggestion says *why*. | `src/expertise.js`, `repo.signalsForTopic` |
++| The HR system reports a role change (`POST /api/events/role-change`), which SD Worx already knows | The person's documents lose their accountable owner (owner score 0, visible in the explanation) and a handover is proposed to the person the work signals point to. | `src/steward.js` (`roleChange`) |
++| An expert answers a colleague in Teams (`POST /api/expert-replies`) | The answer is captured as a draft source, summarised and checked for agreement. One click publishes it and the gap closes. | `src/steward.js` (`expertReply`) |
++
++Without `ANTHROPIC_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
++
++### 2. When is human verification genuinely valuable?
++
++The **steward** (`src/steward.js`) sweeps every question in every country in the background: on start, after every unreliable answer, after every document or HR change. It only creates a one-click check when:
++
++| Check | Sent to | When | One click |
++|---|---|---|---|
++| Conflict | the accountable owner of the strongest source | sources disagree **and someone actually asked that question** | *Mine is right* / *The other one is right* |
++| Needs an owner | the top expert from the work signals | a source answers rely on lost its owner | *I'll own it* / *Not me* (then the next candidate) |
++| Still correct? | the owner | the source answers rely on has not been touched for 12 months | *Still correct* / *Outdated* |
++| Your chat answer | the expert who answered | their chat answer was captured | *Publish* / *Discard* |
++
++### 3. How is maintenance kept from becoming a burden?
++
++- **Attention budget:** at most 2 open checks per person; the rest waits, ranked by impact (how often the answer was needed).
++- **No periodic reviews:** latent conflicts nobody asked about are counted, not sent.
++- **Never asked twice:** an answered check is not repeated until the document changes.
++- **Confirming is enough:** a one-click "still correct" resets freshness (freshness counts from the later of "written" and "confirmed"), so nobody rewrites a document just to make it look recent.
++- **Clean-up is automatic:** an ownerless source contradicted by its accountable owner is retired and stops appearing in answers.
++
++### 4. How does it fit the user's workflow?
++
++The API is the product: connectors push content in, the answer card and the one-click checks can be rendered in Teams, Slack or an intranet. The home page routes free text through `/api/ask` (so "in Germany" sets the country), and simulates a Teams reply ("Ask in Teams") and two connector events (HR system, Teams channel).
++
++### 5. How does it stay understandable without demanding attention?
++
++- **Calm when it works:** a green answer is one discreet line (answer, source, score). The reasoning is one click away ("Why?").
++- **Clear when action is needed:** amber and red answers show the conflict, who really knows (with the reasons) and what Trust Lens already did about it.
++- **Transparent background:** "Behind the scenes" (`GET /api/activity`) lists everything that happened automatically, plus how much was *not* asked.
++
++### New API routes
++
++| Method | Path | Purpose |
++|---|---|---|
++| POST | `/api/ask` | body `{text, country}`. Free-text question, routed to a topic; returns `matched`, `route` and the full answer |
++| POST | `/api/ingest` | body `{title, body, type?, owner?, countries?, source?}`. Connector entry point, classified automatically |
++| GET | `/api/experts/:topic` | who really knows a topic, with reasons |
++| GET | `/api/verifications` | open one-click checks, highest impact first |
++| POST | `/api/verifications/:id` | body `{response}`, one of the two choices of that check |
++| POST | `/api/events/role-change` | body `{person, newRole?}`. HR webhook |
++| POST | `/api/expert-replies` | body `{questionId, country, person, text}`. Capture a chat answer as a draft |
++| POST | `/api/steward/run` | run a background sweep now |
++| GET | `/api/activity` | what happened in the background, counters and what is being watched |
++
++Uploads (`/api/upload`) and document writes trigger a background sweep too. Every answer (`/api/answer`, `/api/ask`) now also returns `experts` (learned from signals) next to the original `expert` field.
++
++### Schema v6
++
++Migration 6 (after the upload, keyword, type and country migrations 2 to 5) adds `documents.verified_on`, `verified_by`, `status` (`live`, `draft`, `retired`), `people.active`, and the tables `signals` (traces of work), `verifications` (one-click checks) and `activity` (background log). Existing databases upgrade automatically.
++
+ ## Project layout
+ 
+ ```
+@@ -196,7 +264,10 @@ src/repo.js          all SQL, validation and transactions
+ src/countries.js     ISO 3166-1 country list and name/code resolver
+ src/metadata.js      placeholder summary/keyword generation (LLM goes here)
+ src/seed.js          loads demo data into an empty database
+-src/trust.js         scoring and verdict logic
++src/trust.js         scoring and verdict logic (freshness counts from the last confirmation)
++src/expertise.js     who really knows a topic, learned from work signals that fade with time
++src/steward.js       background sweep, attention budget, one-click checks, HR events, expert answers
++src/ai.js            Claude (routing, classification, agreement, summaries) with a keyword fallback
+ src/server.js        HTTP API and static UI
+ public/index.html    UI
+ test/                unit, database and API tests
+@@ -210,12 +281,14 @@ demo/demo.js         scripted CLI demo
+ - **Add a country:** add it to `COUNTRIES` in `src/trust.js` and to the dropdown in `public/index.html`.
+ - **Schema changes:** append a new string to `MIGRATIONS` in `src/db.js`. Never edit an existing one.
+ - **Different database:** all SQL is in `src/repo.js`, so moving to PostgreSQL means reimplementing that one file.
+-- **Automatic claim extraction:** replace the hand-provided `claim` and `answer` with an LLM step that runs when a document is created or updated.
++- **Automatic claim extraction:** done through `POST /api/ingest` (Claude, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
++- **Real connectors:** point a Teams/Slack/wiki webhook at `/api/ingest` and the HR system at `/api/events/role-change`.
+ 
+ ## Limitations (proof of concept)
+ 
+ - The demo data is fictional and small.
+-- `claim` labels are provided by hand, so conflict detection is only as good as those labels.
++- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Claude catches.
++- Work signals (chat, tickets, commits) and HR events are simulated in `data/seed.json` and the demo controls; real connectors would post to `/api/ingest` and `/api/events/role-change`.
+ - Scores are transparent heuristics, not calibrated against real outcomes.
+ - No authentication: no accounts, permissions or email verification, and all write routes are open.
+ - Uploads are limited to `.md`/`.txt` files of about 200 KB. No PDF or Word parsing yet.
+diff --git a/data/seed.json b/data/seed.json
+index 5253842..e9cd8ba 100644
+--- a/data/seed.json
++++ b/data/seed.json
+@@ -180,5 +180,146 @@
+       "answer": "Team lead and finance",
+       "body": "# Payslip corrections\n_Edited September 2022, author unknown._\n\nRetroactive corrections need approval from the **team lead and finance**. Send the request through the ticket form."
+     }
++  ],
++  "people": [
++    "Pieter Claes (Payroll BE)",
++    "Ines Mertens (HR Onboarding)",
++    "Koen Willems (Payroll NL)",
++    "Bram Peeters (Payroll Engine)"
++  ],
++  "signals": [
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "chat_answer",
++      "month": "2026-05",
++      "detail": "answered a leaver bonus question in #payroll-help"
++    },
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "chat_answer",
++      "month": "2026-07",
++      "detail": "answered a leaver bonus question in #payroll-help"
++    },
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "chat_answer",
++      "month": "2026-08",
++      "detail": "answered a leaver bonus question in #payroll-help"
++    },
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "chat_answer",
++      "month": "2026-09",
++      "detail": "answered a leaver bonus question in #payroll-help"
++    },
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "ticket",
++      "month": "2026-06",
++      "detail": "closed a leaver bonus payroll ticket"
++    },
++    {
++      "person": "Pieter Claes",
++      "topic": "leaver-bonus",
++      "kind": "ticket",
++      "month": "2026-08",
++      "detail": "closed a leaver bonus payroll ticket"
++    },
++    {
++      "person": "Nadia Peeters",
++      "topic": "leaver-bonus",
++      "kind": "chat_answer",
++      "month": "2026-03",
++      "detail": "answered in #payroll-help"
++    },
++    {
++      "person": "Tom de Vries",
++      "topic": "leaver-bonus",
++      "kind": "meeting",
++      "month": "2026-01",
++      "detail": "Acme contract review"
++    },
++    {
++      "person": "Jan Weber",
++      "topic": "leaver-bonus",
++      "kind": "ticket",
++      "month": "2026-07",
++      "detail": "German leaver asked about their bonus"
++    },
++    {
++      "person": "Ines Mertens",
++      "topic": "new-hire-deadline",
++      "kind": "ticket",
++      "month": "2026-07",
++      "detail": "new hire reported late"
++    },
++    {
++      "person": "Ines Mertens",
++      "topic": "new-hire-deadline",
++      "kind": "ticket",
++      "month": "2026-08",
++      "detail": "new hire reported late"
++    },
++    {
++      "person": "Ines Mertens",
++      "topic": "new-hire-deadline",
++      "kind": "ticket",
++      "month": "2026-09",
++      "detail": "new hire reported late"
++    },
++    {
++      "person": "Lea Martin",
++      "topic": "new-hire-deadline",
++      "kind": "meeting",
++      "month": "2026-06",
++      "detail": "onboarding process update"
++    },
++    {
++      "person": "Koen Willems",
++      "topic": "retro-correction",
++      "kind": "chat_answer",
++      "month": "2026-04",
++      "detail": "explained who approves corrections in #ops"
++    },
++    {
++      "person": "Koen Willems",
++      "topic": "retro-correction",
++      "kind": "chat_answer",
++      "month": "2026-08",
++      "detail": "explained who approves corrections in #ops"
++    },
++    {
++      "person": "Bram Peeters",
++      "topic": "retro-correction",
++      "kind": "commit",
++      "month": "2026-06",
++      "detail": "approval rule in the payroll engine"
++    },
++    {
++      "person": "Bram Peeters",
++      "topic": "retro-correction",
++      "kind": "commit",
++      "month": "2026-06",
++      "detail": "approval rule in the payroll engine"
++    },
++    {
++      "person": "Bram Peeters",
++      "topic": "retro-correction",
++      "kind": "commit",
++      "month": "2026-07",
++      "detail": "approval rule in the payroll engine"
++    },
++    {
++      "person": "Sara Janssens",
++      "topic": "retro-correction",
++      "kind": "meeting",
++      "month": "2025-12",
++      "detail": "approval matrix sign-off"
++    }
+   ]
+ }
+diff --git a/demo/demo.js b/demo/demo.js
+index d7f0443..6aa6716 100644
+--- a/demo/demo.js
++++ b/demo/demo.js
+@@ -1,5 +1,6 @@
+ 'use strict';
+-// Scripted 3-minute demo: good case, conflict case, gap case. Starts its own server.
++// Scripted demo: good / conflict / gap cases, then the finals story (targeted checks, HR event,
++// expert answer captured, free text, connector). Starts its own in-memory server.
+ const { createServer } = require('../src/server');
+ const { openDb } = require('../src/db');
+ 
+@@ -45,6 +46,49 @@ const ICON = { rely: '🟢', check: '🟡', hold: '🔴' };
+   const gaps = await (await fetch(base + '/api/gaps')).json();
+   console.log('\n=== KNOWLEDGE GAPS LOGGED ===');
+   console.log(gaps.ranked.map(g => `${g.questionId} (${g.country}) asked ${g.asked}x, gaps ${g.gaps}, conflicts ${g.conflicts}`).join('\n'));
++
++  // ---- Finals: keep it trusted without becoming another task ---------------------------
++  const post = async (p, body) => (await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
++  const get = async p => (await fetch(base + p)).json();
++  const checks = async () => {
++    const list = await get('/api/verifications');
++    console.log(list.length ? list.map(v => `   📨 one click for ${v.person} [${v.kind}]: ${v.reason}`).join('\n') : '   (no check needed: nobody is disturbed)');
++    return list;
++  };
++  console.log('\n=== WHO REALLY KNOWS (learned from chat answers, tickets, edits; nobody filled in a profile) ===');
++  for (const e of await get('/api/experts/leaver-bonus')) console.log(`   ${e.name} (${e.role}): ${e.why.join(', ')}`);
++
++  console.log('\n=== TARGETED CHECKS: the conflict was asked about, so its owner gets exactly one click ===');
++  let list = await checks();
++  const c = list.find(v => v.kind === 'conflict' && v.person === 'Nadia Peeters');
++  await post('/api/verifications/' + c.id, { response: 'keep' });
++  console.log('>>> Nadia clicks "Mine is right"');
++  show('CONFLICT RESOLVED: same question', await ask('leaver-bonus', 'BE'), 'BE');
++
++  console.log('\n=== HR EVENT: Nadia Peeters moves to Finance Ops (from the HR system, nobody updates anything) ===');
++  await post('/api/events/role-change', { person: 'Nadia Peeters', newRole: 'Finance Ops' });
++  list = await checks();
++  const h = list.find(v => v.kind === 'handover');
++  await post('/api/verifications/' + h.id, { response: 'accept' });
++  console.log(`>>> ${h.person} clicks "I'll own it"`);
++
++  console.log('\n=== EXPERT ANSWER CAPTURED: an answer given in Teams becomes reusable knowledge ===');
++  const r = await post('/api/expert-replies', { questionId: 'new-hire-deadline', country: 'NL', person: 'Ines Mertens',
++    text: 'For the Netherlands we report a new hire before the first working day, same as Belgium.' });
++  console.log(`   Draft: "${r.document.title}" (${r.summary.via}; agrees with ${r.claim.matched || 'nothing yet'})`);
++  list = await checks();
++  await post('/api/verifications/' + list.find(v => v.kind === 'draft').id, { response: 'publish' });
++  show('GAP CLOSED BY A CHAT ANSWER', await ask('new-hire-deadline', 'NL'), 'NL');
++
++  console.log('\n=== FREE TEXT + CONNECTOR: nobody labels anything ===');
++  const free = await post('/api/ask', { text: 'Who approves a retroactive correction of a payslip in the Netherlands?', country: 'BE' });
++  console.log(`   "${free.route && free.question}" routed by ${free.route.via} -> ${ICON[free.verdict]} ${free.answer} (${free.country})`);
++  const ing = await post('/api/ingest', { title: 'Teams: #payroll-help (NL)', source: 'Teams', body: 'Q: leaver bonus for Dutch employees?\nA: In the Netherlands the leaver bonus is pro rata by days worked.' });
++  console.log(`   Ingested "${ing.document.title}": topic ${ing.document.topic}, agrees with ${ing.classification.claim.matched || 'nothing'} (${ing.classification.via})`);
++
++  const act = await get('/api/activity');
++  console.log(`\n=== BEHIND THE SCENES: ${act.watching.sources} sources watched, ${act.checks.total} one-click checks sent, ${act.checks.answered} answered, ${act.watching.latentConflicts} latent conflicts left alone ===`);
++  act.items.slice().reverse().forEach(i => console.log(`   · ${i.message}`));
+   server.closeAllConnections?.();
+   server.close();
+   server.db.close();
+diff --git a/public/index.html b/public/index.html
+index d197c61..7df452d 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -59,6 +59,30 @@ pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;backg
+ details>summary{cursor:pointer;font-weight:600;padding:6px 0}
+ @media(max-width:600px){.seg{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.search .c{flex:1 1 100%;width:100%}.meta{grid-template-columns:1fr}}
+ footer{margin-top:28px;color:var(--mute);font-size:.85rem}
++/* ---- keep it trusted ---- */
++.calm{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:12px;padding:14px 16px;background:var(--card)}
++.calm .tick{color:var(--ok);font-weight:700;font-size:1.3rem;line-height:1.2}
++.calm .a{font-size:1.15rem;font-weight:600}
++.calm .m{font-size:.86rem;color:var(--mute)}
++.who{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
++.who small{display:block;color:var(--mute)}
++.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font:inherit;cursor:pointer}
++textarea.reply{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);min-height:80px;margin:8px 0}
++.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
++.check{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
++.check .for{font-size:.78rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
++.check p{margin:6px 0 10px;font-size:.92rem}
++.btns{display:flex;gap:8px;flex-wrap:wrap}
++.empty{color:var(--mute);border:1px dashed var(--line);border-radius:12px;padding:14px}
++.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
++.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
++.stat b{display:block;font-size:1.6rem;line-height:1.1}
++.stat span{font-size:.82rem;color:var(--mute)}
++ol.log{list-style:none;margin:0;padding:0;font-size:.9rem;max-height:420px;overflow:auto}
++ol.log li{padding:8px 0;border-top:1px solid var(--line);display:flex;gap:10px}
++ol.log li .k{flex:0 0 96px;color:var(--mute);font-size:.78rem;padding-top:2px}
++.demo{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
++@media(max-width:600px){ol.log li{flex-direction:column;gap:0}ol.log li .k{flex:none}}
+ </style></head><body><main>
+ <h1>Don’t just find the answer. See why you can rely on it.</h1>
+ <p class="lead">Ask a question. Trust Lens ranks every source by how fresh it is, who owns it, whether it applies to this country, and whether others agree. It shows conflicts and who to ask when documents are not enough.</p>
+@@ -72,6 +96,18 @@ footer{margin-top:28px;color:var(--mute);font-size:.85rem}
+ <div id="results" aria-live="polite"></div>
+ <div id="answer" aria-live="polite"></div>
+ 
++<h2 id="checks">One-click checks <small class="mute" id="budget" style="font-weight:400;font-size:.85rem"></small></h2>
++<div id="inbox"></div>
++<h2>Behind the scenes <small class="mute" style="font-weight:400;font-size:.85rem">what happened automatically, so nobody had to</small></h2>
++<div class="stats" id="stats"></div>
++<ol class="log" id="log"></ol>
++<details style="margin:12px 0 0"><summary>Demo controls: simulate signals from existing tools</summary>
++ <div class="demo">
++  <button type="button" class="ghost" onclick="hrEvent()">HR system: Nadia Peeters moves to Finance Ops</button>
++  <button type="button" class="ghost" onclick="teamsMsg()">Teams: a new #payroll-help message arrives (NL)</button>
++ </div>
++</details>
++
+ <h2 id="upl">Add or update a document</h2>
+ <form class="card" id="uf" novalidate>
+  <div class="drop" id="drop"><input type="file" id="file" accept=".md,.markdown,.txt" style="display:none"><button type="button" class="link" id="pick">Choose a file</button> or drop it here (.md or .txt, max 200 KB)<div id="fname" class="mute"></div></div>
+@@ -125,9 +161,13 @@ async function search(q){
+  try{
+   const r=await api('/api/search?q='+encodeURIComponent(q));
+   S.last=r;
++  // Claude (or the keyword fallback) understands free text, including the country it mentions
++  let ask=null;try{ask=await api('/api/ask',{text:q,country:$('c').value})}catch{}
++  if(ask&&ask.matched&&ask.country&&ask.country!==$('c').value)$('c').value=ask.country;
+   let h='';
+   if(r.questions.length){h+='<h2>Questions we can answer</h2>'+r.questions.map(x=>`<button type="button" class="qbtn" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('')}
+   if(r.documents.length){h+='<h2>Matching documents</h2>'+r.documents.map(docCard).join('')}
++  if(!r.questions.length&&ask&&ask.matched){box.innerHTML='<p class="mute" style="font-size:.85rem">Understood as <strong>'+esc(ask.question)+'</strong> · routed by '+esc(ask.route.via)+'</p>'+h;showAnswer(ask.questionId);return}
+   if(!h)h='<div class="banner"><strong>Nothing found.</strong> No document matches these words. That is a knowledge gap: try other words, or add a document below.</div>';
+   box.innerHTML=h;
+   const[a,b]=r.questions;if(a&&(!b||a.score>=b.score*1.5))showAnswer(a.id); // open automatically when one question clearly leads
+@@ -137,20 +177,36 @@ function rerenderDocs(){if(S.last)search($('q').value.trim())}
+ 
+ /* ---------- verdict ---------- */
+ async function showAnswer(id){
++ if(S.qid!==id){S.why=false;S.compose=null}
+  S.qid=id;let d;
+  try{d=await api('/api/answer',{questionId:id,country:$('c').value})}
+  catch(e){$('answer').innerHTML=`<div class="banner">${esc(e.message)}</div>`;return}
+- let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2><div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
++ S.d=d;
++ let h=`<h2>${esc(d.question)} <span class="tag">${esc(d.country)}</span></h2>`;
++ if(d.verdict==='rely'){
++  const top=d.sources.find(s=>s.file===d.basedOn.file),conf=top&&top.score.verified?` · confirmed by ${esc(top.verifiedBy)}`:'';
++  h+=`<div class="calm"><div class="tick" aria-hidden="true">✓</div><div><div class="a">${esc(d.answer)}</div><div class="m">Reliable · ${esc(d.basedOn.title)} · ${d.basedOn.score}/100${conf} · <button type="button" class="link" style="margin:0" onclick="S.why=!S.why;S.noScroll=true;showAnswer(S.qid).then(()=>S.noScroll=false)">${S.why?'Hide why':'Why?'}</button></div></div></div>`;
++  if(!S.why){$('answer').innerHTML=h;side();if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});return}
++  h+='<div>';
++ }else{
++ h+=`<div class="verdict" style="--c:${COLOR[d.verdict]}"><div class="v">${esc(d.label)}</div><div class="ans">${d.basedOn?'Best supported answer: <strong>'+esc(d.answer)+'</strong>':esc(d.answer)}</div>`;
+  if(d.basedOn)h+=`<div>Based on <strong>${esc(d.basedOn.title)}</strong>, trust score <strong>${d.basedOn.score}/100</strong>.</div>`;
+- if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. The first has the stronger evidence, yet someone should confirm.</div>`;
+- if(d.expert)h+=`<div class="next"><strong>Who can help:</strong> ${esc(d.expert)}</div>`;
++ if(d.conflict)h+=`<div class="banner"><strong>Sources disagree.</strong> ${esc(d.conflict.best.title)} says “${esc(d.conflict.best.says)}”, but ${esc(d.conflict.other.title)} says “${esc(d.conflict.other.says)}”. Trust Lens has asked the accountable owner for one click.</div>`;
++ h+=`<div class="next"><strong>Who really knows this</strong> <span class="tag">learned from everyday work, nobody filled in a profile</span>`;
++ if(!(d.experts||[]).length)h+=`<div>${esc(d.expert||'Nobody yet.')}</div>`;
++ (d.experts||[]).forEach((x,i)=>{
++  h+=`<div class="who"><div><strong>${esc(x.name)}</strong>${x.role?' · '+esc(x.role):''}<small>${esc(x.why.join(' · '))}</small></div><button type="button" class="ghost" onclick="S.compose=${i};S.noScroll=true;showAnswer(S.qid).then(()=>S.noScroll=false)">Ask in Teams</button></div>`;
++  if(S.compose===i)h+=`<div><small class="mute">Simulated: ${esc(x.name)} replies in Teams. Trust Lens captures the reply as a draft source.</small><textarea class="reply" id="reply">${esc(d.country==='DE'?'In Germany the leaver bonus is pro rata by months worked, same as Belgium. It is in the 2025 works council agreement.':'It is pro rata by months worked. The chat message saying “full bonus after 1 October” is outdated.')}</textarea><button type="button" class="btn" onclick="sendReply('${esc(x.name)}')">Send reply as ${esc(x.name)}</button></div>`;
++ });
++ h+='</div>';
++ }
+  h+='</div><h2>Sources, ranked. Tap a bar to see why.</h2>';
+  d.sources.forEach((s,i)=>{
+   const key=d.questionId+i+d.country,sel=S.open[key]||'applies',r=s.score;
+   const seg=SEGS.map(([k,l,m])=>`<button type="button" data-bar="${esc(key)}|${k}" aria-pressed="${sel==k}"><i style="width:${r[k]/m*100}%"></i><span>${l} ${r[k]}/${m}</span></button>`).join('');
+   h+=`<div class="card src ${r.applies?'':'out'}"><div class="top"><div><strong>${esc(s.title)}</strong> <span class="tag">${esc(s.type)}</span></div><div class="sc">${r.total}/100</div></div><div class="mute">Says: “${esc(s.says)}”</div><div class="seg">${seg}</div><div class="exp">${esc(s.why[sel])}</div><button type="button" class="link" data-open="${esc(s.file)}">${S.shown[s.file]?'Hide':'Open'} source file</button>${S.shown[s.file]?'<pre class="file">'+esc(S.texts[s.file])+'</pre>':''}</div>`;
+  });
+- $('answer').innerHTML=h;
++ $('answer').innerHTML=h;side();
+  if(!S.noScroll)$('answer').scrollIntoView({behavior:'smooth',block:'start'});
+ }
+ 
+@@ -188,7 +244,7 @@ async function upload(e){
+  $('go').disabled=true;
+  try{
+   const r=await api('/api/upload',body);
+-  showUploaded(r);await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
++  showUploaded(r);side();await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
+  }catch(x){err(x.message)}finally{$('go').disabled=false}
+ }
+ function showUploaded(r){
+@@ -242,6 +298,29 @@ async function addCountry(){
+  }catch(e){msg.innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+ }
+ 
++/* ---------- keep it trusted: one-click checks, background log, simulated signals ---------- */
++const BTN={conflict:[['keep','Mine is right'],['other','The other one is right']],confirm:[['yes','Still correct'],['no','Outdated']],handover:[['accept','I’ll own it'],['decline','Not me']],draft:[['publish','Publish'],['discard','Discard']]};
++const KIND={conflict:'Conflict',confirm:'Still correct?',handover:'Needs an owner',draft:'Your chat answer'};
++async function side(){
++ try{
++  const[checks,act]=await Promise.all([api('/api/verifications'),api('/api/activity')]);
++  $('budget').textContent=`sent only when a person’s judgement matters · max ${act.budgetPerPerson} open per person`;
++  $('inbox').innerHTML=checks.length?'<div class="grid">'+checks.map(v=>`<div class="check"><div class="for">For ${esc(v.person)} · ${KIND[v.kind]}${v.payload.countries?' · '+esc(v.payload.countries.join(', ')):''}</div><p>${esc(v.reason)}</p><div class="btns">${BTN[v.kind].map(([r,l],i)=>`<button type="button" class="${i?'ghost':'btn'}" onclick="answerCheck(${v.id},'${r}')">${l}</button>`).join('')}</div></div>`).join('')+'</div>'
++   :'<div class="empty">Nothing needs anyone right now. That is the point.</div>';
++  const w=act.watching;
++  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?'Claude':'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set ANTHROPIC_API_KEY for Claude)')]]
++   .map(([b,t])=>`<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
++  $('log').innerHTML=act.items.map(i=>`<li><span class="k">${esc(i.kind.replace('_',' '))}</span><span>${esc(i.message)}</span></li>`).join('');
++ }catch(e){$('inbox').innerHTML=`<div class="banner">${esc(e.message)}</div>`}
++}
++async function refreshAnswer(){if(S.qid){S.noScroll=true;await showAnswer(S.qid);S.noScroll=false}else side()}
++async function answerCheck(id,response){try{await api('/api/verifications/'+id,{response});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
++async function sendReply(person){
++ try{await api('/api/expert-replies',{questionId:S.d.questionId,country:S.d.country,person,text:$('reply').value});S.compose=null;await refreshAnswer();$('checks').scrollIntoView({behavior:'smooth',block:'start'})}catch(e){alert(e.message)}
++}
++async function hrEvent(){try{await api('/api/events/role-change',{person:'Nadia Peeters',newRole:'Finance Ops'});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
++async function teamsMsg(){try{await api('/api/ingest',{title:'Teams: #payroll-help (NL thread)',type:'Chat',source:'Teams',body:'Q: How does the leaver bonus work for Dutch employees?\nA: In the Netherlands the leaver bonus is pro rata by days worked.'});await refreshAnswer();await loadDocs()}catch(e){alert(e.message)}}
++
+ /* ---------- init + events ---------- */
+ async function init(){
+  try{
+@@ -250,7 +329,7 @@ async function init(){
+   $('sugg').innerHTML='<span class="mute" style="font-size:.85rem">Try:</span> '+q.questions.map(x=>`<button type="button" class="chip" data-q="${esc(x.id)}">${esc(x.text)}</button>`).join('');
+   $('foot').textContent+=' Today’s date in the demo: '+q.now+'.';
+   try{$('email').value=localStorage.getItem('tl-email')||''}catch{}
+-  syncForm();await loadDocs();await loadLists();
++  syncForm();await loadDocs();await loadLists();side();
+  }catch(e){$('results').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
+ }
+ document.addEventListener('click',async e=>{
+diff --git a/src/ai.js b/src/ai.js
+new file mode 100644
+index 0000000..8bfb298
+--- /dev/null
++++ b/src/ai.js
+@@ -0,0 +1,143 @@
++'use strict';
++// The AI layer: Claude does the background reading so nobody has to label documents by hand.
++//
++//  routeQuestion()   free-text question -> the known topic it is about (+ country if mentioned)
++//  classify()        new document -> topic, short answer, countries
++//  matchClaim()      does this statement say the same thing as an existing source? (semantic agreement)
++//  summarize()       long chat answer -> one short answer line
++//
++// With ANTHROPIC_API_KEY set, Claude is used. Without it (or if the call fails or times out),
++// a transparent keyword fallback answers instead, so the demo never depends on the network.
++// Every result says which one produced it (`via`), so the UI can show it.
++const { COUNTRIES } = require('./trust');
++
++const MODEL = process.env.TRUST_AI_MODEL || 'claude-haiku-5-5';
++const TIMEOUT_MS = 12_000;
++const enabled = () => !!process.env.ANTHROPIC_API_KEY && process.env.TRUST_AI !== 'off';
++
++async function claudeJson(system, prompt, maxTokens = 300) {
++  const res = await fetch('https://api.anthropic.com/v1/messages', {
++    method: 'POST',
++    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
++    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system: system + '\nReply with one JSON object only, no prose.', messages: [{ role: 'user', content: prompt }] }),
++    signal: AbortSignal.timeout(TIMEOUT_MS)
++  });
++  if (!res.ok) throw new Error(`Claude API returned ${res.status}`);
++  const data = await res.json();
++  const text = (data.content || []).map(c => c.text || '').join('');
++  const m = text.match(/\{[\s\S]*\}/);
++  if (!m) throw new Error('Claude did not return JSON');
++  return JSON.parse(m[0]);
++}
++
++// Try Claude, fall back to the local heuristic. Never throws.
++async function withFallback(viaClaude, fallback) {
++  if (enabled()) {
++    try { return { ...(await viaClaude()), via: 'Claude' }; }
++    catch (e) { console.warn(`[ai] Claude unavailable (${e.message}), using the keyword fallback`); }
++  }
++  return { ...fallback(), via: 'keyword fallback' };
++}
++
++// ---- local heuristics -----------------------------------------------------------------
++const STOP = new Set('a an and are as at be by can do does for from has have here how i if in is it its me my of on or our so that the this to us was we what when where which who why will with work works you your should about really know knows done before'.split(' '));
++const COUNTRY_WORDS = { BE: ['belgium', 'belgian', 'be'], NL: ['netherlands', 'dutch', 'holland', 'nl'], DE: ['germany', 'german', 'deutschland', 'de'] };
++const tokens = t => String(t).toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w)).map(w => w.slice(0, 6));
++
++function detectCountries(text) {
++  const words = new Set(String(text).toLowerCase().replace(/[^a-z ]+/g, ' ').split(/\s+/));
++  const upper = new Set(String(text).match(/\b[A-Z]{2}\b/g) || []);
++  return COUNTRIES.filter(c => upper.has(c) || COUNTRY_WORDS[c].some(w => w.length > 2 && words.has(w)));
++}
++
++function keywordRoute(text, topics) {
++  const q = new Set(tokens(text));
++  let best = null;
++  for (const t of topics) {
++    const vocab = new Set(tokens(t.text + ' ' + (t.vocabulary || '')));
++    const core = new Set(tokens(t.text));
++    let score = 0;
++    for (const w of q) if (core.has(w)) score += 2; else if (vocab.has(w)) score += 1;
++    if (!best || score > best.score) best = { id: t.id, score };
++  }
++  return best && best.score >= 2 ? { questionId: best.id, confidence: Math.min(1, best.score / 6) } : { questionId: null, confidence: 0 };
++}
++
++const jaccard = (a, b) => {
++  const x = new Set(tokens(a)), y = new Set(tokens(b));
++  if (!x.size || !y.size) return 0;
++  let inter = 0; for (const w of x) if (y.has(w)) inter++;
++  return inter / (x.size + y.size - inter);
++};
++
++const nextLabel = used => {
++  for (let i = 0; i < 26; i++) { const l = String.fromCharCode(65 + i); if (!used.includes(l)) return l; }
++  return 'N' + used.length;
++};
++
++function firstStatement(body) {
++  // first line that states something: skip headings' markup, questions and "Q:" lines, drop "A:" prefixes
++  const lines = String(body).split('\n').map(l => l.replace(/^[#>*\-\s]+/, '').trim()).filter(l => l.length > 3);
++  const line = lines.map(l => l.replace(/^(a|answer)\s*:\s*/i, '')).find(l => !/^(q|question)\s*:/i.test(l) && !/\?\s*$/.test(l)) || lines[0] || String(body).trim();
++  const sentence = line.split(/(?<=[.!?])\s/)[0];
++  return sentence.replace(/[.!]$/, '').slice(0, 200);
++}
++
++// ---- public API -----------------------------------------------------------------------
++async function routeQuestion(text, topics) {
++  const r = await withFallback(
++    () => claudeJson(
++      'You route employee questions to the topic they are about, for an HR/payroll knowledge base. Only pick a topic if the question is really about it.',
++      `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nQuestion: ${text}\n\nReturn {"questionId": "<topic id or null>", "confidence": <0..1>, "country": "<BE|NL|DE or null if not mentioned>"}`),
++    () => ({ ...keywordRoute(text, topics), country: detectCountries(text)[0] || null })
++  );
++  if (r.questionId && !topics.some(t => t.id === r.questionId)) r.questionId = null;
++  if (r.country && !COUNTRIES.includes(r.country)) r.country = null;
++  return r;
++}
++
++async function summarize(text, question) {
++  return withFallback(
++    () => claudeJson('You condense an expert answer into one short, factual answer line (max 120 characters), in the language of the answer.',
++      `Question: ${question}\nExpert answer: ${text}\n\nReturn {"text": "<short answer>"}`),
++    () => ({ text: firstStatement(text) })
++  ).then(r => ({ ...r, text: String(r.text || firstStatement(text)).slice(0, 300) }));
++}
++
++// sources: [{claim, says, title}] on the same topic. Returns {label, matched: title|null}.
++async function matchClaim(statement, applicable, allOnTopic = applicable) {
++  const claims = [...new Map(allOnTopic.filter(s => s.claim).map(s => [s.claim, s])).values()];
++  const used = claims.map(s => s.claim);
++  const r = await withFallback(
++    () => claudeJson('You decide whether a new statement means the same thing as one of the existing statements (same rule, maybe different words). Different rules must not match.',
++      `Existing statements:\n${claims.map(s => `- ${s.claim}: ${s.says}`).join('\n') || '(none)'}\n\nNew statement: ${statement}\n\nReturn {"label": "<matching label, or null if it says something different>"}`),
++    () => {
++      let best = null;
++      for (const s of claims) { const j = jaccard(statement, s.says); if (j >= 0.5 && (!best || j > best.j)) best = { label: s.claim, j }; }
++      return { label: best ? best.label : null };
++    }
++  );
++  const hit = r.label && claims.find(s => s.claim === r.label);
++  return hit ? { label: hit.claim, matched: hit.title, via: r.via } : { label: nextLabel(used), matched: null, via: r.via };
++}
++
++// doc: {title, body}. topics: [{id, text, vocabulary}]. Returns {topic, answer, countries, via}.
++async function classify(doc, topics) {
++  const r = await withFallback(
++    () => claudeJson('You read a company document for an HR/payroll knowledge base and extract what it states.',
++      `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nDocument title: ${doc.title}\nDocument:\n${String(doc.body).slice(0, 6000)}\n\n` +
++      'Return {"topic": "<topic id this document answers, or null>", "answer": "<the answer it gives to that topic question, max 120 characters, or null>", "countries": ["<BE|NL|DE it applies to, empty if not stated>"]}', 400),
++    () => {
++      const route = keywordRoute(doc.title + ' ' + doc.body, topics);
++      return { topic: route.questionId, answer: route.questionId ? firstStatement(doc.body.replace(/^#.*$/m, '')) : null, countries: detectCountries(doc.title + ' ' + doc.body) };
++    }
++  );
++  return {
++    topic: topics.some(t => t.id === r.topic) ? r.topic : null,
++    answer: r.answer ? String(r.answer).slice(0, 300) : null,
++    countries: (Array.isArray(r.countries) ? r.countries : []).map(c => String(c).toUpperCase()).filter(c => COUNTRIES.includes(c)),
++    via: r.via
++  };
++}
++
++module.exports = { enabled, routeQuestion, summarize, matchClaim, classify, detectCountries, keywordRoute, jaccard, MODEL };
+diff --git a/src/db.js b/src/db.js
+index 5ccc357..b8a3e75 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -153,6 +153,50 @@ const MIGRATIONS = [
+     name TEXT NOT NULL
+   );
+   INSERT INTO countries(code, name) VALUES ('BE','Belgium'),('NL','Netherlands'),('DE','Germany');
++  `,
++  // v6: keep it trusted without extra work
++  //  - documents can be verified in one click (verified_on resets freshness) and have a lifecycle
++  //  - people can leave a role (active = 0), which makes their documents ownerless
++  //  - signals: traces of everyday work (chat answers, tickets, commits) that reveal who knows what
++  //  - verifications: the few targeted one-click checks the steward decides are worth a human's time
++  //  - activity: a transparent log of everything that happened in the background
++  `
++  ALTER TABLE documents ADD COLUMN verified_on TEXT;
++  ALTER TABLE documents ADD COLUMN verified_by TEXT;
++  ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'live';
++  ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
++
++  CREATE TABLE signals (
++    id     INTEGER PRIMARY KEY,
++    person TEXT NOT NULL,
++    topic  TEXT NOT NULL REFERENCES questions(id),
++    kind   TEXT NOT NULL CHECK (kind IN ('chat_answer','ticket','commit','meeting','expert_reply')),
++    month  TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'),
++    detail TEXT NOT NULL DEFAULT ''
++  );
++  CREATE INDEX idx_signals_topic ON signals(topic);
++
++  CREATE TABLE verifications (
++    id          INTEGER PRIMARY KEY,
++    file        TEXT NOT NULL,
++    person      TEXT NOT NULL,
++    kind        TEXT NOT NULL CHECK (kind IN ('conflict','confirm','handover','draft')),
++    reason      TEXT NOT NULL,
++    priority    INTEGER NOT NULL DEFAULT 0,
++    payload     TEXT NOT NULL DEFAULT '{}',
++    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')),
++    response    TEXT,
++    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
++    answered_at TEXT
++  );
++  CREATE INDEX idx_verifications_open ON verifications(status, person);
++
++  CREATE TABLE activity (
++    id      INTEGER PRIMARY KEY,
++    at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
++    kind    TEXT NOT NULL,
++    message TEXT NOT NULL
++  );
+   `
+ ];
+ 
+diff --git a/src/expertise.js b/src/expertise.js
+new file mode 100644
+index 0000000..ee3c2c1
+--- /dev/null
++++ b/src/expertise.js
+@@ -0,0 +1,75 @@
++'use strict';
++// Who really knows this? Pure logic, no I/O.
++// Expertise is not declared by anyone: it is learned from traces of everyday work
++// (owning or editing a document, answering in chat, closing tickets, verifying a source...).
++// Every trace fades with time (half-life of 6 months), so when someone changes topic or role
++// their expertise fades out on its own and nobody has to update a skills matrix.
++const { parseMonth } = require('./trust');
++
++const HALF_LIFE = 6; // months
++const WEIGHT = {
++  owner: 3,          // currently accountable for a live document on the topic
++  edit: 2,           // edited a document on the topic
++  verified: 2,       // confirmed a source in one click
++  chat_answer: 2,    // answered colleagues in a chat channel
++  ticket: 2,         // resolved a support ticket about it
++  expert_reply: 3,   // was asked as the expert and answered
++  commit: 1,
++  meeting: 1
++};
++const LABEL = {
++  owner: n => `owns ${n} live source${n > 1 ? 's' : ''} on this`,
++  edit: n => `edited sources on this ${n}×`,
++  verified: n => `verified sources on this ${n}×`,
++  chat_answer: n => `answered ${n} similar question${n > 1 ? 's' : ''} in chat`,
++  ticket: n => `resolved ${n} ticket${n > 1 ? 's' : ''} on this`,
++  expert_reply: n => `was asked as the expert ${n}×`,
++  commit: n => `${n} related change${n > 1 ? 's' : ''}`,
++  meeting: n => `ran ${n} meeting${n > 1 ? 's' : ''} on it`
++};
++
++// inverse of parseMonth (year * 12 + month, month 1..12)
++const toMonth = n => `${Math.floor((n - 1) / 12)}-${String(((n - 1) % 12) + 1).padStart(2, '0')}`;
++const decay = (months) => Math.pow(0.5, Math.max(0, months) / HALF_LIFE);
++
++/**
++ * @param signals [{person, kind, month:'YYYY-MM', detail?}]
++ * @param people  [{name, role, active}]  role and active state (several rows per name are possible)
++ * @param now     'YYYY-MM'
++ * @param opts    { exclude: [names], limit }
++ * @returns ranked [{name, role, score, lastSeen, why:[...]}], inactive people left out
++ */
++function rankExperts(signals, people, now, { exclude = [], limit = 3 } = {}) {
++  const nowM = parseMonth(now);
++  const byName = new Map();
++  for (const s of signals) {
++    if (!WEIGHT[s.kind] || exclude.includes(s.person)) continue;
++    const e = byName.get(s.person) || { name: s.person, score: 0, last: -Infinity, kinds: {} };
++    const m = parseMonth(s.month);
++    e.score += WEIGHT[s.kind] * decay(nowM - m);
++    e.last = Math.max(e.last, m);
++    e.kinds[s.kind] = (e.kinds[s.kind] || 0) + 1;
++    byName.set(s.person, e);
++  }
++  const roleOf = name => {
++    const rows = people.filter(p => p.name === name);
++    if (!rows.length) return { known: false, role: '', active: true };
++    const live = rows.find(p => p.active);
++    return { known: true, role: (live || rows[0]).role, active: !!live };
++  };
++  return [...byName.values()]
++    .map(e => ({ ...e, ...roleOf(e.name) }))
++    .filter(e => e.active && e.score >= 0.5)
++    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
++    .slice(0, limit)
++    .map(e => {
++      const ago = nowM - e.last;
++      const why = Object.entries(e.kinds)
++        .sort((a, b) => WEIGHT[b[0]] * b[1] - WEIGHT[a[0]] * a[1])
++        .slice(0, 2).map(([k, n]) => LABEL[k](n));
++      why.push(ago <= 0 ? 'active this month' : `last active ${ago} month${ago > 1 ? 's' : ''} ago`);
++      return { name: e.name, role: e.role, score: Math.round(e.score * 10) / 10, lastSeen: toMonth(e.last), why };
++    });
++}
++
++module.exports = { rankExperts, WEIGHT, HALF_LIFE, decay, toMonth };
+diff --git a/src/repo.js b/src/repo.js
+index 5589aa6..68e54e9 100644
+--- a/src/repo.js
++++ b/src/repo.js
+@@ -17,7 +17,7 @@ const KEYWORD_RE = /^[\p{L}\p{N}][\p{L}\p{N} -]{0,39}$/u;
+ const bad = msg => { throw new HttpError(400, msg); };
+ 
+ const DOC_SELECT = `
+-  SELECT d.*, p.name AS owner_name, p.role AS owner_role, p.email AS owner_email,
++  SELECT d.*, p.name AS owner_name, p.role AS owner_role, p.email AS owner_email, p.active AS owner_active,
+     e.name AS editor_name, e.role AS editor_role, e.email AS editor_email,
+     (SELECT group_concat(country, ',') FROM
+        (SELECT country FROM document_countries c WHERE c.document_id = d.id ORDER BY country)) AS countries,
+@@ -39,7 +39,9 @@ function toDoc(r, withBody = false) {
+     summary: r.summary, keywords: r.keywords ? r.keywords.split(',') : [],
+     originalName: r.original_name, sizeBytes: r.size_bytes, contentHash: r.content_hash,
+     source: r.source, metaSource: r.meta_source,
+-    version: r.version, createdAt: r.created_at, updatedAt: r.updated_at
++    version: r.version, createdAt: r.created_at, updatedAt: r.updated_at,
++    status: r.status || 'live', verifiedOn: r.verified_on || null, verifiedBy: r.verified_by || null,
++    ownerName: r.owner_name || null, ownerActive: r.owner_name ? r.owner_active !== 0 : true
+   };
+   if (withBody) doc.body = r.body;
+   return doc;
+@@ -106,9 +108,9 @@ function createRepo(db) {
+     `SELECT k.keyword, COUNT(dk.document_id) AS uses FROM keywords k LEFT JOIN document_keywords dk ON dk.keyword = k.keyword
+      GROUP BY k.keyword ORDER BY uses DESC, k.keyword LIMIT ?`, limit).map(r => ({ keyword: r.keyword, uses: r.uses }));
+   const listPeople = () => all(
+-    `SELECT p.id, p.name, p.role, p.email, COUNT(d.id) AS owned FROM people p
++    `SELECT p.id, p.name, p.role, p.email, p.active, COUNT(d.id) AS owned FROM people p
+      LEFT JOIN documents d ON d.owner_id = p.id GROUP BY p.id ORDER BY p.name`
+-  ).map(r => ({ id: r.id, name: r.name, role: r.role, email: r.email, owned: r.owned }));
++  ).map(r => ({ id: r.id, name: r.name, role: r.role, email: r.email, active: r.active !== 0, owned: r.owned }));
+ 
+   // ---- documents -----------------------------------------------------------------------
+   const countDocuments = () => one('SELECT COUNT(*) AS n FROM documents').n;
+@@ -119,7 +121,7 @@ function createRepo(db) {
+   function getQuestionWithSources(id) {
+     const q = one('SELECT id, text, expert FROM questions WHERE id = ?', id);
+     if (!q) return null;
+-    const sources = all(`${DOC_SELECT} WHERE d.topic = ? ORDER BY d.file`, id).map(r => toDoc(r));
++    const sources = all(`${DOC_SELECT} WHERE d.topic = ? AND d.status = 'live' ORDER BY d.file`, id).map(r => toDoc(r));
+     return { id: q.id, text: q.text, expert: q.expert, sources };
+   }
+ 
+@@ -363,7 +365,74 @@ function createRepo(db) {
+     return { total: one('SELECT COUNT(*) AS n FROM answer_log').n, ranked, recent };
+   }
+ 
++
++  // ---- keep it trusted: people changes, signals, verifications, activity --------------
++  const questionTexts = () => all('SELECT id, text, expert FROM questions ORDER BY rowid');
++  const addPerson = label => personId(label);
++  const personLabel = name => {
++    const r = one('SELECT name, role FROM people WHERE name = ? ORDER BY active DESC, id DESC LIMIT 1', name);
++    return r ? label(r.name, r.role) : name;
++  };
++  // An HR event: the person leaves their current role(s). Optionally they start a new one.
++  function changeRole(name, newRole) {
++    return transaction(() => {
++      const before = all('SELECT id, role FROM people WHERE name = ? AND active = 1', name);
++      if (!before.length) throw new HttpError(404, `No active person called "${name}"`);
++      run('UPDATE people SET active = 0 WHERE name = ?', name);
++      if (newRole) {
++        run('INSERT OR IGNORE INTO people(name, role) VALUES(?, ?)', name, newRole);
++        run('UPDATE people SET active = 1 WHERE name = ? AND role = ?', name, newRole);
++      }
++      const orphaned = all(`${DOC_SELECT} WHERE p.name = ? AND p.active = 0 AND d.status = 'live' ORDER BY d.file`, name).map(r => toDoc(r));
++      return { name, oldRoles: before.map(b => b.role), newRole: newRole || null, orphaned };
++    });
++  }
++
++  function addSignal({ person, topic, kind, month, detail = '' }) {
++    if (!one('SELECT 1 AS x FROM questions WHERE id = ?', topic)) bad(`Unknown topic "${topic}"`);
++    if (!DATE_RE.test(month || '')) bad('month must be YYYY-MM');
++    run('INSERT INTO signals(person, topic, kind, month, detail) VALUES(?,?,?,?,?)', String(person).slice(0, 120), topic, kind, month, String(detail).slice(0, 300));
++  }
++  // Every trace of work on a topic: explicit signals plus what the database already knows
++  // (who owns, edited and confirmed its documents). Nobody fills in a skills profile.
++  function signalsForTopic(topic) {
++    const out = all('SELECT person, kind, month, detail FROM signals WHERE topic = ?', topic);
++    for (const r of all(`SELECT p.name, d.doc_date FROM documents d JOIN people p ON p.id = d.owner_id
++                         WHERE d.topic = ? AND d.status = 'live' AND p.active = 1`, topic)) out.push({ person: r.name, kind: 'owner', month: r.doc_date });
++    for (const r of all(`SELECT v.edited_by, substr(v.edited_at, 1, 7) AS m FROM document_versions v JOIN documents d ON d.id = v.document_id
++                         WHERE d.topic = ? AND v.edited_by NOT IN ('seed', 'api', 'steward')`, topic)) out.push({ person: r.edited_by, kind: 'edit', month: r.m });
++    for (const r of all(`SELECT verified_by, verified_on FROM documents WHERE topic = ? AND verified_by IS NOT NULL`, topic)) out.push({ person: r.verified_by, kind: 'verified', month: r.verified_on });
++    return out;
++  }
++  const peopleRaw = () => all('SELECT name, role, active FROM people').map(r => ({ name: r.name, role: r.role, active: r.active !== 0 }));
++
++  const setVerified = (file, person, month) => run('UPDATE documents SET verified_on = ?, verified_by = ? WHERE file = ?', month, person, file);
++  const setStatus = (file, status) => run('UPDATE documents SET status = ? WHERE file = ?', status, file);
++  const documentsByStatus = status => all(`${DOC_SELECT} WHERE d.status = ? ORDER BY d.file`, status).map(r => toDoc(r));
++
++  const toVer = r => r && ({ id: r.id, file: r.file, person: r.person, kind: r.kind, reason: r.reason, priority: r.priority,
++    payload: JSON.parse(r.payload), status: r.status, response: r.response, createdAt: r.created_at, answeredAt: r.answered_at });
++  function createVerification({ file, person, kind, reason, priority = 0, payload = {} }) {
++    const { lastInsertRowid } = run('INSERT INTO verifications(file, person, kind, reason, priority, payload) VALUES(?,?,?,?,?,?)',
++      file, person, kind, reason, Math.round(priority), JSON.stringify(payload));
++    return toVer(one('SELECT * FROM verifications WHERE id = ?', Number(lastInsertRowid)));
++  }
++  const getVerification = id => toVer(one('SELECT * FROM verifications WHERE id = ?', id));
++  const openVerifications = () => all("SELECT * FROM verifications WHERE status = 'open' ORDER BY priority DESC, id").map(toVer);
++  const openCountFor = person => one("SELECT COUNT(*) AS n FROM verifications WHERE status = 'open' AND person = ?", person).n;
++  const hasVerification = (file, kind) => !!one("SELECT 1 AS x FROM verifications WHERE file = ? AND kind = ? AND (status = 'open' OR answered_at > (SELECT COALESCE(MAX(updated_at), '') FROM documents WHERE file = ?))", file, kind, file);
++  const closeVerification = (id, response) => run("UPDATE verifications SET status = 'done', response = ?, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", response, id);
++  const verificationStats = () => one(`SELECT COUNT(*) AS total, SUM(status = 'open') AS open, SUM(status = 'done') AS done FROM verifications`);
++
++  const logActivity = (kind, message) => run('INSERT INTO activity(kind, message) VALUES(?, ?)', kind, message);
++  const listActivity = (limit = 30) => all('SELECT at, kind, message FROM activity ORDER BY id DESC LIMIT ?', limit);
++  const activityCounts = () => Object.fromEntries(all('SELECT kind, COUNT(*) AS n FROM activity GROUP BY kind').map(r => [r.kind, r.n]));
++  const askedCount = (questionId, country) => one('SELECT COUNT(*) AS n FROM answer_log WHERE question_id = ? AND country = ?', questionId, country).n;
++
+   return {
++    questionTexts, addPerson, personLabel, changeRole, addSignal, signalsForTopic, peopleRaw,
++    setVerified, setStatus, documentsByStatus, createVerification, getVerification, openVerifications, openCountFor,
++    hasVerification, closeVerification, verificationStats, logActivity, listActivity, activityCounts, askedCount,
+     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
+     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
+     saveUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, documentVersions, logAnswer, gapReport
+diff --git a/src/seed.js b/src/seed.js
+index d0c4177..055f0e5 100644
+--- a/src/seed.js
++++ b/src/seed.js
+@@ -16,7 +16,9 @@ function seedIfEmpty(repo, seedFile = SEED_FILE) {
+   repo.transaction(() => {
+     repo.setSetting('now', seed.now);
+     for (const q of seed.questions) repo.upsertQuestion(q);
++    for (const p of seed.people || []) repo.addPerson(p);
+     for (const d of seed.documents) repo.createDocument({ ...d, source: 'seed' }, 'seed');
++    for (const s of seed.signals || []) repo.addSignal(s); // traces of everyday work (chat, tickets, commits)
+   });
+   return true;
+ }
+diff --git a/src/server.js b/src/server.js
+index 829386f..30a9557 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -7,6 +7,8 @@ const { ISO } = require('./countries');
+ const { openDb, driverName } = require('./db');
+ const { createRepo, HttpError } = require('./repo');
+ const { seedIfEmpty } = require('./seed');
++const { createSteward } = require('./steward');
++const ai = require('./ai');
+ 
+ const INDEX = path.join(__dirname, '..', 'public', 'index.html');
+ 
+@@ -15,6 +17,28 @@ function createServer({ now, db = openDb() } = {}) {
+   if (process.env.SEED_DEMO !== 'false') seedIfEmpty(repo); // demo data only when the DB is empty
+   repo.backfillMetadata();
+   const today = () => now || process.env.TRUST_NOW || repo.getSetting('now');
++  const steward = createSteward(repo, { now: today, ai });
++  const first = steward.sweep('on start');
++  repo.logActivity('watch', `Started watching ${first.sources} sources across ${first.questions} questions. ${first.latentConflicts} latent conflict(s) found; nobody is disturbed until someone actually needs that answer.`);
++
++  // Topics with the vocabulary of their sources, so routing understands more than the question text.
++  const topics = () => repo.questionTexts().map(q => ({
++    id: q.id, text: q.text,
++    vocabulary: repo.getQuestionWithSources(q.id).sources.map(s => `${s.title} ${s.says}`).join(' ')
++  }));
++  // Answer + who really knows, learned from work signals (shown only when the answer is not green).
++  function answerWithPeople(questionId, country) {
++    const q = repo.getQuestionWithSources(questionId);
++    const result = answer(q, country, today(), repo.countryCodes());
++    result.experts = steward.expertsFor(questionId);
++    result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null };
++    if (result.verdict !== 'rely') {
++      repo.logAnswer({ questionId, country, verdict: result.verdict, gap: result.gap, conflict: !!result.conflict });
++      steward.sweep('after an unreliable answer'); // the question was really needed: maybe worth a one-click check now
++    }
++    return result;
++  }
++  const fail = e => { if (e.status) throw new HttpError(e.status, e.message); throw e; };
+ 
+   const send = (res, code, body, type = 'application/json') => {
+     res.writeHead(code, { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-store' });
+@@ -51,21 +75,30 @@ function createServer({ now, db = openDb() } = {}) {
+       }
+       if (m === 'POST' && r1 === 'answer' && parts.length === 2) {
+         const { questionId, country } = await readJson(req);
+-        const q = repo.getQuestionWithSources(questionId);
+-        if (!q) throw new HttpError(400, `Unknown questionId "${questionId}"`);
+-        const codes = repo.countryCodes();
+-        if (!codes.includes(country)) throw new HttpError(400, `Unknown country "${country}"`);
+-        const result = answer(q, country, today(), codes);
+-        if (result.verdict !== 'rely') {
+-          repo.logAnswer({ questionId, country, verdict: result.verdict, gap: result.gap, conflict: !!result.conflict });
++        if (typeof questionId !== 'string' || !repo.getQuestionWithSources(questionId)) throw new HttpError(400, `Unknown questionId "${questionId}"`);
++        if (!repo.countryCodes().includes(country)) throw new HttpError(400, `Unknown country "${country}"`);
++        return send(res, 200, answerWithPeople(questionId, country));
++      }
++      // Free-text question, routed to a topic by Claude (or the keyword fallback).
++      if (m === 'POST' && r1 === 'ask' && parts.length === 2) {
++        const { text, country } = await readJson(req);
++        if (typeof text !== 'string' || !text.trim() || text.length > 500) throw new HttpError(400, 'text is required (max 500 characters)');
++        const route = await ai.routeQuestion(text.trim(), topics());
++        const c = route.country || country;
++        if (!repo.countryCodes().includes(c)) throw new HttpError(400, `Unknown country "${c}"`);
++        if (!route.questionId) {
++          return send(res, 200, { matched: false, text, country: c, route,
++            message: 'Nothing in the knowledge base covers this yet. Ask a colleague; if they answer in chat, Trust Lens can capture it.' });
+         }
+-        return send(res, 200, result);
++        return send(res, 200, { matched: true, route, ...answerWithPeople(route.questionId, c) });
+       }
+       if (r1 === 'documents') {
+         if (m === 'GET' && parts.length === 2) return send(res, 200, repo.listDocuments());
+         if (m === 'POST' && parts.length === 2) {
+           const body = await readJson(req, 500_000);
+-          return send(res, 201, repo.createDocument(body, String(body.editedBy || 'api').slice(0, 80)));
++          const doc = repo.createDocument(body, String(body.editedBy || 'api').slice(0, 80));
++          steward.sweep('after a new document');
++          return send(res, 201, doc);
+         }
+         if (m === 'GET' && parts.length === 3) {
+           const doc = repo.getDocument(file);
+@@ -79,7 +112,9 @@ function createServer({ now, db = openDb() } = {}) {
+         }
+         if (m === 'PUT' && parts.length === 3) {
+           const body = await readJson(req, 500_000);
+-          return send(res, 200, repo.updateDocument(file, body, String(body.editedBy || 'api').slice(0, 80)));
++          const doc = repo.updateDocument(file, body, String(body.editedBy || 'api').slice(0, 80));
++          steward.sweep('after a document change');
++          return send(res, 200, doc);
+         }
+       }
+       if (m === 'GET' && r1 === 'search' && parts.length === 2) return send(res, 200, repo.search(url.searchParams.get('q') || ''));
+@@ -95,10 +130,69 @@ function createServer({ now, db = openDb() } = {}) {
+       if (m === 'GET' && r1 === 'keywords' && parts.length === 2) return send(res, 200, repo.listKeywords(Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit'), 10) || 40))));
+       if (m === 'POST' && r1 === 'upload' && parts.length === 2) {
+         const result = repo.saveUpload(await readJson(req, 500_000));
++        steward.sweep('after an upload');
+         return send(res, result.action === 'created' ? 201 : 200, result);
+       }
+       if (m === 'GET' && r1 === 'people' && parts.length === 2) return send(res, 200, repo.listPeople());
+       if (m === 'GET' && r1 === 'gaps' && parts.length === 2) return send(res, 200, repo.gapReport());
++
++      // ---- keep it trusted ------------------------------------------------------------
++      // A connector (Teams, mail, wiki...) pushes raw content; Claude classifies it. Nobody labels anything.
++      if (m === 'POST' && r1 === 'ingest' && parts.length === 2) {
++        const b = await readJson(req, 250_000);
++        if (typeof b.title !== 'string' || typeof b.body !== 'string') throw new HttpError(400, 'title and body are required');
++        const ts = topics();
++        const cls = await ai.classify({ title: b.title, body: b.body }, ts);
++        const countries = b.countries && b.countries.length ? b.countries : cls.countries.length ? cls.countries : repo.countryCodes();
++        let claim = null;
++        if (cls.topic && cls.answer) {
++          const q = repo.getQuestionWithSources(cls.topic);
++          claim = await ai.matchClaim(cls.answer, q.sources.filter(s => countries.some(c => s.countries.includes(c))), q.sources);
++        }
++        const doc = repo.createDocument({
++          title: b.title, type: b.type || 'Note', date: b.date || today(), owner: b.owner || null, countries, body: b.body,
++          ...(claim ? { topic: cls.topic, claim: claim.label, answer: cls.answer } : {})
++        }, String(b.source || 'connector').slice(0, 80));
++        repo.logActivity('ingest', `Read “${doc.title}” from ${b.source || 'a connector'} (${cls.via}): ${claim ? `answers “${cls.topic}” with “${cls.answer}”${claim.matched ? `, agrees with “${claim.matched}”` : ', a new statement'}` : 'not about a known question, kept as context'}.`);
++        steward.sweep('after ingesting content');
++        return send(res, 201, { document: doc, classification: { ...cls, claim } });
++      }
++      if (m === 'GET' && r1 === 'experts' && parts.length === 3) {
++        if (!repo.getQuestionWithSources(file)) throw new HttpError(404, 'Unknown topic');
++        return send(res, 200, steward.expertsFor(file));
++      }
++      if (r1 === 'verifications') {
++        if (m === 'GET' && parts.length === 2) {
++          return send(res, 200, repo.openVerifications().map(v => ({ ...v, document: (d => d && { title: d.title, says: d.says, type: d.type })(repo.getDocument(v.file)) })));
++        }
++        if (m === 'POST' && parts.length === 3) {
++          const id = Number(file);
++          if (!Number.isInteger(id)) throw new HttpError(400, 'Bad check id');
++          const { response } = await readJson(req);
++          return send(res, 200, await steward.respond(id, response).catch(fail));
++        }
++      }
++      if (m === 'POST' && r1 === 'steward' && file === 'run' && parts.length === 3) return send(res, 200, steward.sweep('on request'));
++      // HR system webhook (SD Worx knows when people change roles): no one has to remember to update ownership.
++      if (m === 'POST' && r1 === 'events' && file === 'role-change' && parts.length === 3) {
++        const { person, newRole } = await readJson(req);
++        if (typeof person !== 'string' || !person.trim()) throw new HttpError(400, 'person is required');
++        if (newRole != null && (typeof newRole !== 'string' || newRole.length > 80)) throw new HttpError(400, 'newRole must be a string');
++        return send(res, 200, steward.roleChange(person.trim(), newRole ? newRole.trim() : null));
++      }
++      // An expert answered in chat: capture it as a draft source, published in one click.
++      if (m === 'POST' && r1 === 'expert-replies' && parts.length === 2) {
++        return send(res, 201, await steward.expertReply(await readJson(req)).catch(fail));
++      }
++      if (m === 'GET' && r1 === 'activity' && parts.length === 2) {
++        const stats = repo.verificationStats();
++        return send(res, 200, {
++          watching: steward.lastSweep(), budgetPerPerson: steward.BUDGET,
++          checks: { total: stats.total || 0, open: stats.open || 0, answered: stats.done || 0 },
++          counts: repo.activityCounts(), items: repo.listActivity(40),
++          ai: { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null }
++        });
++      }
+       throw new HttpError(404, 'Not found');
+     } catch (e) {
+       if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+diff --git a/src/steward.js b/src/steward.js
+new file mode 100644
+index 0000000..4da3af1
+--- /dev/null
++++ b/src/steward.js
+@@ -0,0 +1,189 @@
++'use strict';
++// The steward: everything that keeps Trust Lens trusted without becoming another task.
++//
++//  sweep()        runs in the background (on start, after every unreliable answer, after every
++//                 document or HR change). It watches every question in every country and decides
++//                 which few human checks are worth someone's time.
++//  respond()      applies a one-click answer to one of those checks.
++//  roleChange()   reacts to an HR event (someone changes role or leaves).
++//  expertReply()  turns an answer an expert gave in chat into a draft source, published in one click.
++//
++// Rules for asking a human (the "attention budget"):
++//  - a conflict is only raised once someone has actually asked that question (no value otherwise)
++//  - a stale source is only re-confirmed when it is the source answers rely on
++//  - an ownerless source gets one handover proposal, to the person the work signals point to
++//  - nobody has more than BUDGET open checks at any time; the rest waits, ranked by impact
++//  - a check that was answered is never asked again until the document changes
++const { answer } = require('./trust');
++const { rankExperts } = require('./expertise');
++
++const BUDGET = 2;           // open checks per person
++const STALE_MONTHS = 12;    // a relied-on source not touched for this long gets a "still correct?"
++const BASE = { draft: 90, conflict: 50, handover: 40, confirm: 20 };
++
++function createSteward(repo, { now, ai } = {}) {
++  const today = () => now();
++  let last = { at: null, questions: 0, sources: 0, latentConflicts: 0, created: 0, waiting: 0 };
++
++  const expertsFor = (topic, exclude = []) =>
++    rankExperts(repo.signalsForTopic(topic), repo.peopleRaw(), today(), { exclude });
++
++  function sweep(reason = 'background') {
++    const n = today();
++    const wanted = new Map(); // file|kind -> candidate
++    const want = c => {
++      const key = `${c.file}|${c.kind}`;
++      const prev = wanted.get(key);
++      if (!prev || prev.priority < c.priority) wanted.set(key, { ...c, countries: [...new Set([...(prev?.countries || []), c.country])] });
++      else prev.countries = [...new Set([...prev.countries, c.country])];
++    };
++    let latent = 0;
++    const files = new Set();
++    const questions = repo.questionTexts();
++    for (const q of questions) {
++      const qs = repo.getQuestionWithSources(q.id);
++      qs.sources.forEach(s => files.add(s.file));
++      const codes = repo.countryCodes();
++      for (const country of codes) {
++        const r = answer(qs, country, n, codes);
++        const asked = repo.askedCount(q.id, country);
++        const top = r.basedOn ? repo.getDocument(r.basedOn.file) : null;
++        if (!top) continue;
++        const topScore = r.sources.find(s => s.file === top.file).score;
++        if (r.conflict) {
++          if (asked === 0) latent++;
++          else if (top.ownerActive && top.ownerName) {
++            want({ file: top.file, kind: 'conflict', person: top.ownerName, country, priority: BASE.conflict + asked * 10,
++              reason: `People asked “${q.text}” (${country}) ${asked}× and got a warning: “${r.conflict.other.title}” contradicts your “${top.title}”.`,
++              payload: { questionId: q.id, best: r.conflict.best, other: r.conflict.other } });
++          }
++        }
++        // Any source answers rely on whose owner left: propose one handover, to whoever the work signals point to.
++        for (const src of r.sources.filter(x => x.score.applies > 0)) {
++          const d = repo.getDocument(src.file);
++          if (!d.ownerName || d.ownerActive) continue;
++          const next = expertsFor(q.id, [d.ownerName])[0];
++          if (next) want({ file: d.file, kind: 'handover', person: next.name, country, priority: BASE.handover + asked * 10,
++            reason: `“${d.title}” lost its owner: ${d.ownerName} changed role. Answers about “${q.text}” use it. Your work suggests you know this topic: ${next.why.join(', ')}.`,
++            payload: { questionId: q.id, previousOwner: d.ownerName, why: next.why } });
++        }
++        if (top.ownerActive && top.ownerName && topScore.age > STALE_MONTHS) {
++          want({ file: top.file, kind: 'confirm', person: top.ownerName, country, priority: BASE.confirm + asked * 10,
++            reason: `Answers about “${q.text}” rely on your “${top.title}”, untouched for ${topScore.age} months. Is it still correct?`,
++            payload: { questionId: q.id } });
++        }
++      }
++    }
++    let created = 0, waiting = 0;
++    for (const c of [...wanted.values()].sort((a, b) => b.priority - a.priority)) {
++      if (repo.hasVerification(c.file, c.kind)) continue;               // already asked, or answered since the last change
++      if (repo.openCountFor(c.person) >= BUDGET) { waiting++; continue; } // attention budget
++      repo.createVerification({ ...c, payload: { ...c.payload, countries: c.countries } });
++      repo.logActivity('check_sent', `Asked ${c.person} for one click on “${repo.getDocument(c.file).title}” (${c.kind}). ${c.reason.split('.')[0]}.`);
++      created++;
++    }
++    last = { at: new Date().toISOString(), reason, questions: questions.length, sources: files.size, latentConflicts: latent, created, waiting };
++    return last;
++  }
++
++  // One-click answers. Every outcome is logged so the background work stays transparent.
++  async function respond(id, response) {
++    const v = repo.getVerification(id);
++    if (!v) throw Object.assign(new Error('Check not found'), { status: 404 });
++    if (v.status !== 'open') throw Object.assign(new Error('This check was already answered'), { status: 409 });
++    const allowed = { conflict: ['keep', 'other'], confirm: ['yes', 'no'], handover: ['accept', 'decline'], draft: ['publish', 'discard'] }[v.kind];
++    if (!allowed.includes(response)) throw Object.assign(new Error(`response must be one of: ${allowed.join(', ')}`), { status: 400 });
++    const n = today();
++    const doc = repo.getDocument(v.file);
++    repo.transaction(() => {
++      if (v.kind === 'conflict') {
++        const { best, other } = v.payload;
++        const otherDoc = repo.getDocument(other.file);
++        if (response === 'other') {
++          repo.updateDocument(doc.file, { claim: otherDoc.claim, answer: otherDoc.says }, v.person);
++          repo.logActivity('corrected', `${v.person} corrected “${doc.title}”: the right answer is “${otherDoc.says}”.`);
++        } else {
++          repo.logActivity('verified', `${v.person} confirmed “${doc.title}”: “${best.says}”.`);
++        }
++        repo.setVerified(doc.file, v.person, n);
++        if (!otherDoc.ownerActive || !otherDoc.ownerName) {
++          repo.setStatus(otherDoc.file, 'retired');
++          repo.logActivity('retired', `Retired ownerless “${otherDoc.title}” ${response === 'other' ? '(its answer now lives in ' + doc.title + ')' : '(contradicted by its accountable owner)'}. It no longer shows up in answers.`);
++        } else {
++          repo.createVerification({ file: otherDoc.file, person: otherDoc.ownerName, kind: 'confirm', priority: BASE.conflict,
++            reason: `${v.person} says “${response === 'other' ? otherDoc.says : best.says}” is right, which ${response === 'other' ? 'agrees with' : 'contradicts'} your “${otherDoc.title}”. Is yours still correct?`,
++            payload: { questionId: v.payload.questionId } });
++        }
++      } else if (v.kind === 'confirm') {
++        if (response === 'yes') {
++          repo.setVerified(doc.file, v.person, n);
++          repo.logActivity('verified', `${v.person} confirmed “${doc.title}” is still correct. Freshness reset, nothing to rewrite.`);
++        } else {
++          repo.setStatus(doc.file, 'retired');
++          repo.logActivity('retired', `${v.person} said “${doc.title}” is outdated. It no longer shows up in answers; the gap is now visible.`);
++        }
++      } else if (v.kind === 'handover') {
++        if (response === 'accept') {
++          repo.updateDocument(doc.file, { owner: repo.personLabel(v.person) }, v.person);
++          repo.setVerified(doc.file, v.person, n);
++          repo.logActivity('handover', `${v.person} took over “${doc.title}” from ${v.payload.previousOwner}. Answers are accountable again.`);
++        } else {
++          const exclude = [v.payload.previousOwner, v.person, ...(v.payload.declined || [])];
++          const next = expertsFor(v.payload.questionId, exclude)[0];
++          repo.logActivity('handover', `${v.person} declined “${doc.title}”.${next ? ` Proposed to ${next.name} instead.` : ' No other candidate: flagged as a gap.'}`);
++          if (next) repo.createVerification({ file: doc.file, person: next.name, kind: 'handover', priority: v.priority,
++            reason: `“${doc.title}” needs an owner after ${v.payload.previousOwner} changed role. Your work suggests you know this topic: ${next.why.join(', ')}.`,
++            payload: { ...v.payload, why: next.why, declined: [...(v.payload.declined || []), v.person] } });
++        }
++      } else if (v.kind === 'draft') {
++        if (response === 'publish') {
++          repo.setStatus(doc.file, 'live');
++          repo.setVerified(doc.file, v.person, n);
++          repo.logActivity('published', `${v.person} published their chat answer as “${doc.title}”. Next time nobody has to ask.`);
++        } else {
++          repo.setStatus(doc.file, 'retired');
++          repo.logActivity('retired', `${v.person} discarded the draft “${doc.title}”.`);
++        }
++      }
++      repo.closeVerification(v.id, response);
++    });
++    return { check: repo.getVerification(id), sweep: sweep('after a one-click answer') };
++  }
++
++  function roleChange(name, newRole) {
++    const r = repo.changeRole(name, newRole);
++    repo.logActivity('hr_event', `HR system: ${name} moved from ${r.oldRoles.filter(Boolean).join(', ') || 'their role'}${newRole ? ' to ' + newRole : ''}. ${r.orphaned.length} source(s) lost their accountable owner. Their expertise on old topics will fade on its own.`);
++    return { ...r, sweep: sweep('after an HR event') };
++  }
++
++  // An expert answered someone's question in chat. Capture it instead of losing it.
++  async function expertReply({ questionId, country, person, text }) {
++    const q = repo.getQuestionWithSources(questionId);
++    if (!q) throw Object.assign(new Error(`Unknown questionId "${questionId}"`), { status: 400 });
++    if (!repo.countryCodes().includes(country)) throw Object.assign(new Error(`Unknown country "${country}"`), { status: 400 });
++    if (typeof person !== 'string' || !person.trim() || person.length > 120) throw Object.assign(new Error('person is required'), { status: 400 });
++    if (typeof text !== 'string' || !text.trim() || text.length > 5000) throw Object.assign(new Error('text is required (max 5000 characters)'), { status: 400 });
++    const name = person.trim();
++    const says = await ai.summarize(text, q.text);
++    const claim = await ai.matchClaim(says.text, q.sources.filter(s => s.countries.includes(country)), q.sources);
++    const doc = repo.transaction(() => {
++      const d = repo.createDocument({
++        title: `${q.text.replace(/\?$/, '')} (${country}): answer by ${name}`.slice(0, 200), type: 'Expert answer', date: today(),
++        owner: repo.personLabel(name), countries: [country], topic: q.id, claim: claim.label, answer: says.text,
++        body: `# ${q.text} (${country})\n\n> Answered by ${name} in Teams, captured by Trust Lens.\n\n${text.trim()}`
++      }, name);
++      repo.setStatus(d.file, 'draft');
++      repo.addSignal({ person: name, topic: q.id, kind: 'expert_reply', month: today(), detail: `answered “${q.text}” for ${country}` });
++      repo.createVerification({ file: d.file, person: name, kind: 'draft', priority: BASE.draft,
++        reason: `You just answered “${q.text}” (${country}) in chat. Publish it so the next person gets it straight away? (summary: “${says.text}”)`,
++        payload: { questionId: q.id, countries: [country] } });
++      repo.logActivity('draft', `Captured ${name}'s chat answer on “${q.text}” (${country}) as a draft (${says.via}${claim.matched ? `, agrees with “${claim.matched}”` : ''}). One click to publish.`);
++      return repo.getDocument(d.file);
++    });
++    return { document: doc, summary: says, claim };
++  }
++
++  return { sweep, respond, roleChange, expertReply, expertsFor, lastSweep: () => last, BUDGET };
++}
++
++module.exports = { createSteward, BUDGET, STALE_MONTHS };
+diff --git a/src/trust.js b/src/trust.js
+index 28ab6b9..d56f33e 100644
+--- a/src/trust.js
++++ b/src/trust.js
+@@ -9,20 +9,29 @@ function parseMonth(str) {
+   return +m[1] * 12 + +m[2];
+ }
+ 
++// Freshness counts from the latest of "written" and "confirmed by a human in one click":
++// an old document that its owner just confirmed is as fresh as a new one.
++const lastTouched = s => (s.verifiedOn && parseMonth(s.verifiedOn) > parseMonth(s.date) ? s.verifiedOn : s.date);
++// An owner who has left the role is accountable for nothing.
++const hasOwner = s => !!s.owner && s.ownerActive !== false;
++
+ function scoreSource(s, country, all, now) {
+-  const age = parseMonth(now) - parseMonth(s.date);
++  const touched = lastTouched(s);
++  const age = parseMonth(now) - parseMonth(touched);
+   const fresh = age <= 6 ? 30 : age <= 18 ? 20 : age <= 36 ? 10 : 0;
+-  const owner = s.owner ? 20 : 0;
++  const owner = hasOwner(s) ? 20 : 0;
+   const applies = s.countries.includes(country) ? 30 : 0;
+   const supporters = all.filter(z => z !== s && z.claim === s.claim && z.countries.includes(country)).length;
+   const agreed = applies ? Math.min(20, supporters * 10) : 0;
+-  return { fresh, owner, applies, agreed, age, total: fresh + owner + applies + agreed };
++  return { fresh, owner, applies, agreed, age, verified: touched !== s.date, total: fresh + owner + applies + agreed };
+ }
+ 
+ function explain(s, r, country) {
+   return {
+-    fresh: `Updated ${r.age < 1 ? 'this month' : r.age + ' months ago'}. ${r.fresh === 30 ? 'Fresh.' : r.fresh >= 20 ? 'Fairly recent.' : 'Getting old.'}`,
+-    owner: s.owner ? `Owned by ${s.owner}.` : 'No named owner. Nobody is accountable for this.',
++    fresh: `${r.verified ? `Confirmed still correct by ${s.verifiedBy || 'its owner'}` : 'Updated'} ${r.age < 1 ? 'this month' : r.age + ' months ago'}. ${r.fresh === 30 ? 'Fresh.' : r.fresh >= 20 ? 'Fairly recent.' : 'Getting old.'}`,
++    owner: hasOwner(s) ? `Owned by ${s.owner}.`
++      : s.owner ? `${s.owner} has left this role. Nobody is accountable for it right now.`
++      : 'No named owner. Nobody is accountable for this.',
+     applies: r.applies ? `Applies to ${country}.` : `Does not apply to ${country} (covers ${s.countries.join(', ')}).`,
+     agreed: r.agreed ? `${r.agreed / 10} other applicable source(s) say the same.` : 'No other applicable source confirms this.'
+   };
+@@ -33,7 +42,8 @@ function answer(question, country, now, validCountries = COUNTRIES) {
+   const sources = question.sources
+     .map(s => {
+       const score = scoreSource(s, country, question.sources, now);
+-      return { file: s.file, title: s.title, type: s.type, date: s.date, owner: s.owner, countries: s.countries,
++      return { file: s.file, title: s.title, type: s.type, date: s.date, owner: s.owner, ownerActive: s.ownerActive !== false,
++               verifiedOn: s.verifiedOn || null, verifiedBy: s.verifiedBy || null, countries: s.countries,
+                says: s.says, claim: s.claim, score, why: explain(s, score, country) };
+     })
+     .sort((a, b) => b.score.total - a.score.total);
+@@ -56,11 +66,11 @@ function answer(question, country, now, validCountries = COUNTRIES) {
+ 
+   return {
+     questionId: question.id, question: question.text, country, verdict, label, answer: text,
+-    basedOn: top ? { title: top.title, score: top.score.total } : null,
++    basedOn: top ? { file: top.file, title: top.title, score: top.score.total } : null,
+     gap: !top,
+-    conflict: alt ? { best: { title: top.title, says: top.says }, other: { title: alt.title, says: alt.says } } : null,
++    conflict: alt ? { best: { file: top.file, title: top.title, says: top.says }, other: { file: alt.file, title: alt.title, says: alt.says } } : null,
+     expert, sources
+   };
+ }
+ 
+-module.exports = { COUNTRIES, MAX, parseMonth, scoreSource, answer };
++module.exports = { COUNTRIES, MAX, parseMonth, scoreSource, answer, lastTouched, hasOwner };
+diff --git a/test/db.test.js b/test/db.test.js
+index 2f9d387..20a2608 100644
+--- a/test/db.test.js
++++ b/test/db.test.js
+@@ -33,7 +33,7 @@ test('seeding loads the corpus and is idempotent', () => {
+   assert.equal(repo.getSetting('now'), '2026-09');
+   assert.equal(seedIfEmpty(repo), false);
+   assert.equal(repo.countDocuments(), 11);
+-  assert.equal(repo.listPeople().length, 6);
++  assert.equal(repo.listPeople().length, 10); // 6 document owners + 4 colleagues seen only in work signals
+   db.close();
+ });
+ 
+diff --git a/test/finals.test.js b/test/finals.test.js
+new file mode 100644
+index 0000000..3a53f96
+--- /dev/null
++++ b/test/finals.test.js
+@@ -0,0 +1,142 @@
++'use strict';
++// "Keep it trusted": expertise from work signals, verified freshness, departed owners,
++// the steward's attention budget, one-click checks, HR events, expert replies, free-text routing.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const { rankExperts, decay } = require('../src/expertise');
++const { scoreSource } = require('../src/trust');
++const ai = require('../src/ai');
++const { createServer } = require('../src/server');
++const { openDb } = require('../src/db');
++
++process.env.TRUST_AI = 'off'; // tests never call the network
++
++async function start() {
++  const server = createServer({ now: '2026-09', db: openDb(':memory:') });
++  await new Promise(r => server.listen(0, r));
++  const base = `http://127.0.0.1:${server.address().port}`;
++  const call = async (p, body) => {
++    const r = await fetch(base + p, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
++    return { status: r.status, body: await r.json() };
++  };
++  const stop = () => { server.closeAllConnections?.(); server.close(); server.db.close(); };
++  return { call, stop };
++}
++
++test('expertise fades with time and ignores people who left', () => {
++  assert.equal(decay(0), 1);
++  assert.equal(decay(6), 0.5);
++  const signals = [
++    { person: 'Old Hand', kind: 'chat_answer', month: '2024-01' },
++    { person: 'Old Hand', kind: 'chat_answer', month: '2024-02' },
++    { person: 'New Star', kind: 'chat_answer', month: '2026-09' },
++    { person: 'Gone', kind: 'ticket', month: '2026-09' }
++  ];
++  const people = [{ name: 'Gone', role: 'X', active: false }, { name: 'New Star', role: 'Payroll', active: true }];
++  const r = rankExperts(signals, people, '2026-09');
++  assert.deepEqual(r.map(e => e.name), ['New Star']); // Old Hand faded below the threshold, Gone left
++  assert.equal(r[0].role, 'Payroll');
++  assert.match(r[0].why.join(' '), /answered 1 similar question in chat/);
++  assert.deepEqual(rankExperts(signals, people, '2026-09', { exclude: ['New Star'] }), []);
++});
++
++test('a one-click confirmation resets freshness; an owner who left scores 0', () => {
++  const base = { date: '2023-01', owner: 'A (B)', countries: ['BE'], claim: 'A' };
++  assert.equal(scoreSource(base, 'BE', [base], '2026-09').fresh, 0);
++  const verified = { ...base, verifiedOn: '2026-09', verifiedBy: 'A' };
++  const s = scoreSource(verified, 'BE', [verified], '2026-09');
++  assert.equal(s.fresh, 30);
++  assert.equal(s.verified, true);
++  assert.equal(scoreSource({ ...base, ownerActive: false }, 'BE', [base], '2026-09').owner, 0);
++});
++
++test('keyword fallback routes free text, detects countries and matches claims by meaning', async () => {
++  const topics = [{ id: 'leaver-bonus', text: 'How is a leaver’s year-end bonus calculated?' }, { id: 'retro-correction', text: 'Who can approve a retroactive payslip correction?' }];
++  const r = await ai.routeQuestion('who knows the leaver bonus rules in Germany', topics);
++  assert.equal(r.questionId, 'leaver-bonus');
++  assert.equal(r.country, 'DE');
++  assert.equal(r.via, 'keyword fallback');
++  assert.equal((await ai.routeQuestion('where is the coffee machine', topics)).questionId, null);
++  const src = [{ claim: 'A', says: 'Pro rata by months worked', title: 'Manual' }, { claim: 'C', says: 'Pro rata by days worked', title: 'Wiki' }];
++  assert.deepEqual((await ai.matchClaim('In the Netherlands it is pro rata by days worked', src)).label, 'C');
++  const fresh = await ai.matchClaim('Full bonus, always', src);
++  assert.equal(fresh.label, 'B');
++  assert.equal(fresh.matched, null);
++});
++
++test('steward: no one is disturbed until a conflicting answer is actually needed, then one owner gets one click', async () => {
++  const { call, stop } = await start();
++  try {
++    assert.equal((await call('/api/verifications')).body.length, 0);
++    const a = (await call('/api/answer', { questionId: 'leaver-bonus', country: 'BE' })).body;
++    assert.equal(a.verdict, 'check');
++    assert.equal(a.experts[0].name, 'Pieter Claes'); // learned from chat answers and tickets, not declared
++    const checks = (await call('/api/verifications')).body;
++    assert.equal(checks.length, 1);
++    assert.equal(checks[0].person, 'Nadia Peeters');
++    assert.equal(checks[0].kind, 'conflict');
++    // asking again does not send a second check
++    await call('/api/answer', { questionId: 'leaver-bonus', country: 'BE' });
++    assert.equal((await call('/api/verifications')).body.length, 1);
++    assert.equal((await call('/api/verifications/' + checks[0].id, { response: 'nope' })).status, 400);
++    assert.equal((await call('/api/verifications/' + checks[0].id, { response: 'keep' })).status, 200);
++    assert.equal((await call('/api/verifications/' + checks[0].id, { response: 'keep' })).status, 409);
++    const b = (await call('/api/answer', { questionId: 'leaver-bonus', country: 'BE' })).body;
++    assert.equal(b.verdict, 'rely');
++    assert.ok(!b.sources.some(s => s.file === 'teams-payroll-help.md')); // the ownerless chat was retired
++    const manual = b.sources.find(s => s.file === 'payroll-manual-v7.md');
++    assert.equal(manual.verifiedBy, 'Nadia Peeters');
++  } finally { stop(); }
++});
++
++test('HR event: the departed owner’s source gets a handover to whoever the work signals point to', async () => {
++  const { call, stop } = await start();
++  try {
++    const rc = (await call('/api/events/role-change', { person: 'Nadia Peeters', newRole: 'Finance Ops' })).body;
++    assert.deepEqual(rc.orphaned.map(d => d.file), ['payroll-manual-v7.md']);
++    const h = (await call('/api/verifications')).body.find(v => v.kind === 'handover');
++    assert.equal(h.person, 'Pieter Claes');
++    const a = (await call('/api/answer', { questionId: 'leaver-bonus', country: 'BE' })).body;
++    assert.equal(a.sources.find(s => s.file === 'payroll-manual-v7.md').score.owner, 0);
++    await call('/api/verifications/' + h.id, { response: 'accept' });
++    const doc = (await call('/api/documents/payroll-manual-v7.md')).body;
++    assert.equal(doc.owner, 'Pieter Claes (Payroll BE)');
++    assert.equal((await call('/api/events/role-change', { person: 'Nobody Known' })).status, 404);
++  } finally { stop(); }
++});
++
++test('expert reply in chat becomes a draft, published in one click, closing the gap', async () => {
++  const { call, stop } = await start();
++  try {
++    assert.equal((await call('/api/answer', { questionId: 'leaver-bonus', country: 'DE' })).body.verdict, 'hold');
++    const r = await call('/api/expert-replies', { questionId: 'leaver-bonus', country: 'DE', person: 'Jan Weber', text: 'Pro rata by months worked, as in Belgium.' });
++    assert.equal(r.status, 201);
++    assert.equal(r.body.document.status, 'draft');
++    assert.equal(r.body.claim.label, 'A'); // same meaning as the Belgian manual
++    assert.equal((await call('/api/answer', { questionId: 'leaver-bonus', country: 'DE' })).body.verdict, 'hold'); // drafts are not used
++    const d = (await call('/api/verifications')).body.find(v => v.kind === 'draft');
++    assert.equal(d.person, 'Jan Weber');
++    await call('/api/verifications/' + d.id, { response: 'publish' });
++    assert.equal((await call('/api/answer', { questionId: 'leaver-bonus', country: 'DE' })).body.verdict, 'rely');
++    assert.equal((await call('/api/expert-replies', { questionId: 'nope', country: 'DE', person: 'x', text: 'y' })).status, 400);
++  } finally { stop(); }
++});
++
++test('free-text ask and connector ingest work without anyone labelling anything', async () => {
++  const { call, stop } = await start();
++  try {
++    const a = (await call('/api/ask', { text: 'Who approves a retroactive correction of a payslip?', country: 'NL' })).body;
++    assert.equal(a.matched, true);
++    assert.equal(a.questionId, 'retro-correction');
++    assert.equal(a.verdict, 'rely');
++    assert.equal((await call('/api/ask', { text: 'Where is the coffee machine?', country: 'BE' })).body.matched, false);
++    assert.equal((await call('/api/ask', { text: '' })).status, 400);
++    const ing = (await call('/api/ingest', { title: 'Teams: #payroll-help (NL)', source: 'Teams', body: 'Q: leaver bonus NL?\nA: In the Netherlands the leaver bonus is pro rata by days worked.' })).body;
++    assert.equal(ing.document.topic, 'leaver-bonus');
++    assert.equal(ing.document.claim, 'C'); // agrees with the NL wiki
++    assert.deepEqual(ing.document.countries, ['NL']);
++    const act = (await call('/api/activity')).body;
++    assert.equal(act.counts.ingest, 1);
++    assert.ok(act.items.some(i => i.kind === 'watch'));
++  } finally { stop(); }
++});
+-- 
+2.43.0
+
+
+From 1284edaecba5ef6cb6969b6847642a627fa22b4c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 13:53:52 +0200
+Subject: [PATCH 2/2] Use Google Gemini instead of Claude for the AI layer
+
+- src/ai.js calls the Gemini generateContent REST API (JSON mode)
+- GEMINI_API_KEY (or GOOGLE_API_KEY) enables it; default model gemini-3.8-flash,
+  overridable with TRUST_AI_MODEL; keyword fallback unchanged
+- UI, server comments and README updated
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01E34p4tMnXfkHjdXtc98yJS
+---
+ README.md         | 16 +++++++--------
+ public/index.html |  4 ++--
+ src/ai.js         | 52 +++++++++++++++++++++++++++--------------------
+ src/server.js     |  8 ++++----
+ 4 files changed, 44 insertions(+), 36 deletions(-)
+
+diff --git a/README.md b/README.md
+index 8ce1d11..8766381 100644
+--- a/README.md
++++ b/README.md
+@@ -27,8 +27,8 @@ npm run reseed       # delete the database file and load the demo data again
+ | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
+ | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
+ | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
+-| `ANTHROPIC_API_KEY` | unset | when set, Claude reads content, routes free-text questions and judges agreement |
+-| `TRUST_AI_MODEL` | `claude-haiku-5-5` | Claude model used by `src/ai.js` |
++| `GEMINI_API_KEY` | unset | when set (or `GOOGLE_API_KEY`), Google Gemini reads content, routes free-text questions and judges agreement |
++| `TRUST_AI_MODEL` | `gemini-3.8-flash` | Gemini model used by `src/ai.js` |
+ | `TRUST_AI` | on | set to `off` to force the local keyword fallback (tests do this) |
+ 
+ ## How everything works
+@@ -197,13 +197,13 @@ The goal is not zero human involvement, it is zero unnecessary effort. Each ques
+ 
+ | Signal from existing tools | What Trust Lens does on its own | Code |
+ |---|---|---|
+-| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Claude reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
+-| An employee types a question in their own words (`POST /api/ask`) | Claude routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
++| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Gemini reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
++| An employee types a question in their own words (`POST /api/ask`) | Gemini routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
+ | Everyday work: chat answers, resolved tickets, commits, edits, ownership, one-click confirmations | Builds the **who really knows this** ranking. Every trace fades with a 6-month half-life, so people who moved on stop being suggested without anyone updating a skills matrix. Every suggestion says *why*. | `src/expertise.js`, `repo.signalsForTopic` |
+ | The HR system reports a role change (`POST /api/events/role-change`), which SD Worx already knows | The person's documents lose their accountable owner (owner score 0, visible in the explanation) and a handover is proposed to the person the work signals point to. | `src/steward.js` (`roleChange`) |
+ | An expert answers a colleague in Teams (`POST /api/expert-replies`) | The answer is captured as a draft source, summarised and checked for agreement. One click publishes it and the gap closes. | `src/steward.js` (`expertReply`) |
+ 
+-Without `ANTHROPIC_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
++Without `GEMINI_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
+ 
+ ### 2. When is human verification genuinely valuable?
+ 
+@@ -267,7 +267,7 @@ src/seed.js          loads demo data into an empty database
+ src/trust.js         scoring and verdict logic (freshness counts from the last confirmation)
+ src/expertise.js     who really knows a topic, learned from work signals that fade with time
+ src/steward.js       background sweep, attention budget, one-click checks, HR events, expert answers
+-src/ai.js            Claude (routing, classification, agreement, summaries) with a keyword fallback
++src/ai.js            Gemini (routing, classification, agreement, summaries) with a keyword fallback
+ src/server.js        HTTP API and static UI
+ public/index.html    UI
+ test/                unit, database and API tests
+@@ -281,13 +281,13 @@ demo/demo.js         scripted CLI demo
+ - **Add a country:** add it to `COUNTRIES` in `src/trust.js` and to the dropdown in `public/index.html`.
+ - **Schema changes:** append a new string to `MIGRATIONS` in `src/db.js`. Never edit an existing one.
+ - **Different database:** all SQL is in `src/repo.js`, so moving to PostgreSQL means reimplementing that one file.
+-- **Automatic claim extraction:** done through `POST /api/ingest` (Claude, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
++- **Automatic claim extraction:** done through `POST /api/ingest` (Gemini, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
+ - **Real connectors:** point a Teams/Slack/wiki webhook at `/api/ingest` and the HR system at `/api/events/role-change`.
+ 
+ ## Limitations (proof of concept)
+ 
+ - The demo data is fictional and small.
+-- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Claude catches.
++- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Gemini catches.
+ - Work signals (chat, tickets, commits) and HR events are simulated in `data/seed.json` and the demo controls; real connectors would post to `/api/ingest` and `/api/events/role-change`.
+ - Scores are transparent heuristics, not calibrated against real outcomes.
+ - No authentication: no accounts, permissions or email verification, and all write routes are open.
+diff --git a/public/index.html b/public/index.html
+index 7df452d..c216cc7 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -161,7 +161,7 @@ async function search(q){
+  try{
+   const r=await api('/api/search?q='+encodeURIComponent(q));
+   S.last=r;
+-  // Claude (or the keyword fallback) understands free text, including the country it mentions
++  // Gemini (or the keyword fallback) understands free text, including the country it mentions
+   let ask=null;try{ask=await api('/api/ask',{text:q,country:$('c').value})}catch{}
+   if(ask&&ask.matched&&ask.country&&ask.country!==$('c').value)$('c').value=ask.country;
+   let h='';
+@@ -308,7 +308,7 @@ async function side(){
+   $('inbox').innerHTML=checks.length?'<div class="grid">'+checks.map(v=>`<div class="check"><div class="for">For ${esc(v.person)} · ${KIND[v.kind]}${v.payload.countries?' · '+esc(v.payload.countries.join(', ')):''}</div><p>${esc(v.reason)}</p><div class="btns">${BTN[v.kind].map(([r,l],i)=>`<button type="button" class="${i?'ghost':'btn'}" onclick="answerCheck(${v.id},'${r}')">${l}</button>`).join('')}</div></div>`).join('')+'</div>'
+    :'<div class="empty">Nothing needs anyone right now. That is the point.</div>';
+   const w=act.watching;
+-  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?'Claude':'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set ANTHROPIC_API_KEY for Claude)')]]
++  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?(act.ai.provider||'Gemini'):'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set GEMINI_API_KEY for Gemini)')]]
+    .map(([b,t])=>`<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
+   $('log').innerHTML=act.items.map(i=>`<li><span class="k">${esc(i.kind.replace('_',' '))}</span><span>${esc(i.message)}</span></li>`).join('');
+  }catch(e){$('inbox').innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+diff --git a/src/ai.js b/src/ai.js
+index 8bfb298..61857b3 100644
+--- a/src/ai.js
++++ b/src/ai.js
+@@ -1,40 +1,48 @@
+ 'use strict';
+-// The AI layer: Claude does the background reading so nobody has to label documents by hand.
++// The AI layer: Gemini does the background reading so nobody has to label documents by hand.
+ //
+ //  routeQuestion()   free-text question -> the known topic it is about (+ country if mentioned)
+ //  classify()        new document -> topic, short answer, countries
+ //  matchClaim()      does this statement say the same thing as an existing source? (semantic agreement)
+ //  summarize()       long chat answer -> one short answer line
+ //
+-// With ANTHROPIC_API_KEY set, Claude is used. Without it (or if the call fails or times out),
+-// a transparent keyword fallback answers instead, so the demo never depends on the network.
+-// Every result says which one produced it (`via`), so the UI can show it.
++// With GEMINI_API_KEY (or GOOGLE_API_KEY) set, Google Gemini is used. Without it (or if the call
++// fails or times out), a transparent keyword fallback answers instead, so the demo never depends
++// on the network. Every result says which one produced it (`via`), so the UI can show it.
+ const { COUNTRIES } = require('./trust');
+ 
+-const MODEL = process.env.TRUST_AI_MODEL || 'claude-haiku-5-5';
++const MODEL = process.env.TRUST_AI_MODEL || 'gemini-3.8-flash';
++const PROVIDER = 'Gemini';
+ const TIMEOUT_MS = 12_000;
+-const enabled = () => !!process.env.ANTHROPIC_API_KEY && process.env.TRUST_AI !== 'off';
++const apiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
++const enabled = () => !!apiKey() && process.env.TRUST_AI !== 'off';
+ 
+-async function claudeJson(system, prompt, maxTokens = 300) {
+-  const res = await fetch('https://api.anthropic.com/v1/messages', {
++// One call to the Gemini generateContent REST endpoint, asking for a JSON object back.
++async function geminiJson(system, prompt, maxTokens = 300) {
++  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`;
++  const res = await fetch(url, {
+     method: 'POST',
+-    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system: system + '\nReply with one JSON object only, no prose.', messages: [{ role: 'user', content: prompt }] }),
++    headers: { 'x-goog-api-key': apiKey(), 'content-type': 'application/json' },
++    body: JSON.stringify({
++      systemInstruction: { parts: [{ text: system + '\nReply with one JSON object only, no prose.' }] },
++      contents: [{ role: 'user', parts: [{ text: prompt }] }],
++      generationConfig: { temperature: 0, maxOutputTokens: maxTokens, responseMimeType: 'application/json' }
++    }),
+     signal: AbortSignal.timeout(TIMEOUT_MS)
+   });
+-  if (!res.ok) throw new Error(`Claude API returned ${res.status}`);
++  if (!res.ok) throw new Error(`Gemini API returned ${res.status}`);
+   const data = await res.json();
+-  const text = (data.content || []).map(c => c.text || '').join('');
++  const text = ((data.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+   const m = text.match(/\{[\s\S]*\}/);
+-  if (!m) throw new Error('Claude did not return JSON');
++  if (!m) throw new Error('Gemini did not return JSON');
+   return JSON.parse(m[0]);
+ }
+ 
+-// Try Claude, fall back to the local heuristic. Never throws.
+-async function withFallback(viaClaude, fallback) {
++// Try Gemini, fall back to the local heuristic. Never throws.
++async function withFallback(viaAi, fallback) {
+   if (enabled()) {
+-    try { return { ...(await viaClaude()), via: 'Claude' }; }
+-    catch (e) { console.warn(`[ai] Claude unavailable (${e.message}), using the keyword fallback`); }
++    try { return { ...(await viaAi()), via: PROVIDER }; }
++    catch (e) { console.warn(`[ai] ${PROVIDER} unavailable (${e.message}), using the keyword fallback`); }
+   }
+   return { ...fallback(), via: 'keyword fallback' };
+ }
+@@ -86,7 +94,7 @@ function firstStatement(body) {
+ // ---- public API -----------------------------------------------------------------------
+ async function routeQuestion(text, topics) {
+   const r = await withFallback(
+-    () => claudeJson(
++    () => geminiJson(
+       'You route employee questions to the topic they are about, for an HR/payroll knowledge base. Only pick a topic if the question is really about it.',
+       `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nQuestion: ${text}\n\nReturn {"questionId": "<topic id or null>", "confidence": <0..1>, "country": "<BE|NL|DE or null if not mentioned>"}`),
+     () => ({ ...keywordRoute(text, topics), country: detectCountries(text)[0] || null })
+@@ -98,7 +106,7 @@ async function routeQuestion(text, topics) {
+ 
+ async function summarize(text, question) {
+   return withFallback(
+-    () => claudeJson('You condense an expert answer into one short, factual answer line (max 120 characters), in the language of the answer.',
++    () => geminiJson('You condense an expert answer into one short, factual answer line (max 120 characters), in the language of the answer.',
+       `Question: ${question}\nExpert answer: ${text}\n\nReturn {"text": "<short answer>"}`),
+     () => ({ text: firstStatement(text) })
+   ).then(r => ({ ...r, text: String(r.text || firstStatement(text)).slice(0, 300) }));
+@@ -109,7 +117,7 @@ async function matchClaim(statement, applicable, allOnTopic = applicable) {
+   const claims = [...new Map(allOnTopic.filter(s => s.claim).map(s => [s.claim, s])).values()];
+   const used = claims.map(s => s.claim);
+   const r = await withFallback(
+-    () => claudeJson('You decide whether a new statement means the same thing as one of the existing statements (same rule, maybe different words). Different rules must not match.',
++    () => geminiJson('You decide whether a new statement means the same thing as one of the existing statements (same rule, maybe different words). Different rules must not match.',
+       `Existing statements:\n${claims.map(s => `- ${s.claim}: ${s.says}`).join('\n') || '(none)'}\n\nNew statement: ${statement}\n\nReturn {"label": "<matching label, or null if it says something different>"}`),
+     () => {
+       let best = null;
+@@ -124,7 +132,7 @@ async function matchClaim(statement, applicable, allOnTopic = applicable) {
+ // doc: {title, body}. topics: [{id, text, vocabulary}]. Returns {topic, answer, countries, via}.
+ async function classify(doc, topics) {
+   const r = await withFallback(
+-    () => claudeJson('You read a company document for an HR/payroll knowledge base and extract what it states.',
++    () => geminiJson('You read a company document for an HR/payroll knowledge base and extract what it states.',
+       `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nDocument title: ${doc.title}\nDocument:\n${String(doc.body).slice(0, 6000)}\n\n` +
+       'Return {"topic": "<topic id this document answers, or null>", "answer": "<the answer it gives to that topic question, max 120 characters, or null>", "countries": ["<BE|NL|DE it applies to, empty if not stated>"]}', 400),
+     () => {
+@@ -140,4 +148,4 @@ async function classify(doc, topics) {
+   };
+ }
+ 
+-module.exports = { enabled, routeQuestion, summarize, matchClaim, classify, detectCountries, keywordRoute, jaccard, MODEL };
++module.exports = { enabled, routeQuestion, summarize, matchClaim, classify, detectCountries, keywordRoute, jaccard, MODEL, PROVIDER };
+diff --git a/src/server.js b/src/server.js
+index 30a9557..4263e2f 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -31,7 +31,7 @@ function createServer({ now, db = openDb() } = {}) {
+     const q = repo.getQuestionWithSources(questionId);
+     const result = answer(q, country, today(), repo.countryCodes());
+     result.experts = steward.expertsFor(questionId);
+-    result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null };
++    result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null, provider: ai.PROVIDER };
+     if (result.verdict !== 'rely') {
+       repo.logAnswer({ questionId, country, verdict: result.verdict, gap: result.gap, conflict: !!result.conflict });
+       steward.sweep('after an unreliable answer'); // the question was really needed: maybe worth a one-click check now
+@@ -79,7 +79,7 @@ function createServer({ now, db = openDb() } = {}) {
+         if (!repo.countryCodes().includes(country)) throw new HttpError(400, `Unknown country "${country}"`);
+         return send(res, 200, answerWithPeople(questionId, country));
+       }
+-      // Free-text question, routed to a topic by Claude (or the keyword fallback).
++      // Free-text question, routed to a topic by Gemini (or the keyword fallback).
+       if (m === 'POST' && r1 === 'ask' && parts.length === 2) {
+         const { text, country } = await readJson(req);
+         if (typeof text !== 'string' || !text.trim() || text.length > 500) throw new HttpError(400, 'text is required (max 500 characters)');
+@@ -137,7 +137,7 @@ function createServer({ now, db = openDb() } = {}) {
+       if (m === 'GET' && r1 === 'gaps' && parts.length === 2) return send(res, 200, repo.gapReport());
+ 
+       // ---- keep it trusted ------------------------------------------------------------
+-      // A connector (Teams, mail, wiki...) pushes raw content; Claude classifies it. Nobody labels anything.
++      // A connector (Teams, mail, wiki...) pushes raw content; Gemini classifies it. Nobody labels anything.
+       if (m === 'POST' && r1 === 'ingest' && parts.length === 2) {
+         const b = await readJson(req, 250_000);
+         if (typeof b.title !== 'string' || typeof b.body !== 'string') throw new HttpError(400, 'title and body are required');
+@@ -190,7 +190,7 @@ function createServer({ now, db = openDb() } = {}) {
+           watching: steward.lastSweep(), budgetPerPerson: steward.BUDGET,
+           checks: { total: stats.total || 0, open: stats.open || 0, answered: stats.done || 0 },
+           counts: repo.activityCounts(), items: repo.listActivity(40),
+-          ai: { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null }
++          ai: { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null, provider: ai.PROVIDER }
+         });
+       }
+       throw new HttpError(404, 'Not found');
+-- 
+2.43.0
+
