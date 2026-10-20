@@ -12,6 +12,8 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 - **Node 22.13+:** uses the built-in `node:sqlite`. No install needed.
 - **Node 18 or 20:** run `npm install` once. It installs `better-sqlite3`, an optional dependency used as the SQLite driver. The app picks the driver automatically, and `/api/health` reports which one is active.
+=======
+Requires **Node >= 22.13**. No dependencies and no `npm install`: the database is Node's built-in `node:sqlite`. 
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
