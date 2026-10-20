@@ -8,7 +8,8 @@
     "seed": "node src/seed.js",
     "reseed": "node src/seed.js --reset",
     "test": "node --test",
-    "demo": "node demo/demo.js"
+    "demo": "node demo/demo.js",
+    "llm:check": "node scripts/llm-check.js"
   },
   "engines": {
     "node": ">=18.18"
