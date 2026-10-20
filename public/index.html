@@ -161,7 +161,7 @@ async function search(q){
  try{
   const r=await api('/api/search?q='+encodeURIComponent(q));
   S.last=r;
-  // Claude (or the keyword fallback) understands free text, including the country it mentions
+  // Gemini (or the keyword fallback) understands free text, including the country it mentions
   let ask=null;try{ask=await api('/api/ask',{text:q,country:$('c').value})}catch{}
   if(ask&&ask.matched&&ask.country&&ask.country!==$('c').value)$('c').value=ask.country;
   let h='';
@@ -308,7 +308,7 @@ async function side(){
   $('inbox').innerHTML=checks.length?'<div class="grid">'+checks.map(v=>`<div class="check"><div class="for">For ${esc(v.person)} · ${KIND[v.kind]}${v.payload.countries?' · '+esc(v.payload.countries.join(', ')):''}</div><p>${esc(v.reason)}</p><div class="btns">${BTN[v.kind].map(([r,l],i)=>`<button type="button" class="${i?'ghost':'btn'}" onclick="answerCheck(${v.id},'${r}')">${l}</button>`).join('')}</div></div>`).join('')+'</div>'
    :'<div class="empty">Nothing needs anyone right now. That is the point.</div>';
   const w=act.watching;
-  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?'Claude':'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set ANTHROPIC_API_KEY for Claude)')]]
+  $('stats').innerHTML=[[w.sources,'sources watched continuously'],[act.checks.total,'one-click checks sent in total'],[act.checks.answered,'answered in one click'],[w.latentConflicts,'latent conflicts nobody needed yet (nobody disturbed)'],[act.counts.ingest||0,'items read from Teams and other tools'],[act.ai.enabled?(act.ai.provider||'Gemini'):'Local','AI reading content'+(act.ai.model?' ('+act.ai.model+')':' (set GEMINI_API_KEY for Gemini)')]]
    .map(([b,t])=>`<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
   $('log').innerHTML=act.items.map(i=>`<li><span class="k">${esc(i.kind.replace('_',' '))}</span><span>${esc(i.message)}</span></li>`).join('');
  }catch(e){$('inbox').innerHTML=`<div class="banner">${esc(e.message)}</div>`}

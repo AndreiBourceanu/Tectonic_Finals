@@ -31,7 +31,7 @@ function createServer({ now, db = openDb() } = {}) {
     const q = repo.getQuestionWithSources(questionId);
     const result = answer(q, country, today(), repo.countryCodes());
     result.experts = steward.expertsFor(questionId);
-    result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null };
+    result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null, provider: ai.PROVIDER };
     if (result.verdict !== 'rely') {
       repo.logAnswer({ questionId, country, verdict: result.verdict, gap: result.gap, conflict: !!result.conflict });
       steward.sweep('after an unreliable answer'); // the question was really needed: maybe worth a one-click check now
@@ -79,7 +79,7 @@ function createServer({ now, db = openDb() } = {}) {
         if (!repo.countryCodes().includes(country)) throw new HttpError(400, `Unknown country "${country}"`);
         return send(res, 200, answerWithPeople(questionId, country));
       }
-      // Free-text question, routed to a topic by Claude (or the keyword fallback).
+      // Free-text question, routed to a topic by Gemini (or the keyword fallback).
       if (m === 'POST' && r1 === 'ask' && parts.length === 2) {
         const { text, country } = await readJson(req);
         if (typeof text !== 'string' || !text.trim() || text.length > 500) throw new HttpError(400, 'text is required (max 500 characters)');
@@ -137,7 +137,7 @@ function createServer({ now, db = openDb() } = {}) {
       if (m === 'GET' && r1 === 'gaps' && parts.length === 2) return send(res, 200, repo.gapReport());
 
       // ---- keep it trusted ------------------------------------------------------------
-      // A connector (Teams, mail, wiki...) pushes raw content; Claude classifies it. Nobody labels anything.
+      // A connector (Teams, mail, wiki...) pushes raw content; Gemini classifies it. Nobody labels anything.
       if (m === 'POST' && r1 === 'ingest' && parts.length === 2) {
         const b = await readJson(req, 250_000);
         if (typeof b.title !== 'string' || typeof b.body !== 'string') throw new HttpError(400, 'title and body are required');
@@ -190,7 +190,7 @@ function createServer({ now, db = openDb() } = {}) {
           watching: steward.lastSweep(), budgetPerPerson: steward.BUDGET,
           checks: { total: stats.total || 0, open: stats.open || 0, answered: stats.done || 0 },
           counts: repo.activityCounts(), items: repo.listActivity(40),
-          ai: { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null }
+          ai: { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null, provider: ai.PROVIDER }
         });
       }
       throw new HttpError(404, 'Not found');

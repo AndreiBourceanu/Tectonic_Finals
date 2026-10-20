@@ -1,40 +1,48 @@
 'use strict';
-// The AI layer: Claude does the background reading so nobody has to label documents by hand.
+// The AI layer: Gemini does the background reading so nobody has to label documents by hand.
 //
 //  routeQuestion()   free-text question -> the known topic it is about (+ country if mentioned)
 //  classify()        new document -> topic, short answer, countries
 //  matchClaim()      does this statement say the same thing as an existing source? (semantic agreement)
 //  summarize()       long chat answer -> one short answer line
 //
-// With ANTHROPIC_API_KEY set, Claude is used. Without it (or if the call fails or times out),
-// a transparent keyword fallback answers instead, so the demo never depends on the network.
-// Every result says which one produced it (`via`), so the UI can show it.
+// With GEMINI_API_KEY (or GOOGLE_API_KEY) set, Google Gemini is used. Without it (or if the call
+// fails or times out), a transparent keyword fallback answers instead, so the demo never depends
+// on the network. Every result says which one produced it (`via`), so the UI can show it.
 const { COUNTRIES } = require('./trust');
 
-const MODEL = process.env.TRUST_AI_MODEL || 'claude-haiku-5-5';
+const MODEL = process.env.TRUST_AI_MODEL || 'gemini-3.8-flash';
+const PROVIDER = 'Gemini';
 const TIMEOUT_MS = 12_000;
-const enabled = () => !!process.env.ANTHROPIC_API_KEY && process.env.TRUST_AI !== 'off';
+const apiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const enabled = () => !!apiKey() && process.env.TRUST_AI !== 'off';
 
-async function claudeJson(system, prompt, maxTokens = 300) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+// One call to the Gemini generateContent REST endpoint, asking for a JSON object back.
+async function geminiJson(system, prompt, maxTokens = 300) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`;
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system: system + '\nReply with one JSON object only, no prose.', messages: [{ role: 'user', content: prompt }] }),
+    headers: { 'x-goog-api-key': apiKey(), 'content-type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system + '\nReply with one JSON object only, no prose.' }] },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: maxTokens, responseMimeType: 'application/json' }
+    }),
     signal: AbortSignal.timeout(TIMEOUT_MS)
   });
-  if (!res.ok) throw new Error(`Claude API returned ${res.status}`);
+  if (!res.ok) throw new Error(`Gemini API returned ${res.status}`);
   const data = await res.json();
-  const text = (data.content || []).map(c => c.text || '').join('');
+  const text = ((data.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
   const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('Claude did not return JSON');
+  if (!m) throw new Error('Gemini did not return JSON');
   return JSON.parse(m[0]);
 }
 
-// Try Claude, fall back to the local heuristic. Never throws.
-async function withFallback(viaClaude, fallback) {
+// Try Gemini, fall back to the local heuristic. Never throws.
+async function withFallback(viaAi, fallback) {
   if (enabled()) {
-    try { return { ...(await viaClaude()), via: 'Claude' }; }
-    catch (e) { console.warn(`[ai] Claude unavailable (${e.message}), using the keyword fallback`); }
+    try { return { ...(await viaAi()), via: PROVIDER }; }
+    catch (e) { console.warn(`[ai] ${PROVIDER} unavailable (${e.message}), using the keyword fallback`); }
   }
   return { ...fallback(), via: 'keyword fallback' };
 }
@@ -86,7 +94,7 @@ function firstStatement(body) {
 // ---- public API -----------------------------------------------------------------------
 async function routeQuestion(text, topics) {
   const r = await withFallback(
-    () => claudeJson(
+    () => geminiJson(
       'You route employee questions to the topic they are about, for an HR/payroll knowledge base. Only pick a topic if the question is really about it.',
       `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nQuestion: ${text}\n\nReturn {"questionId": "<topic id or null>", "confidence": <0..1>, "country": "<BE|NL|DE or null if not mentioned>"}`),
     () => ({ ...keywordRoute(text, topics), country: detectCountries(text)[0] || null })
@@ -98,7 +106,7 @@ async function routeQuestion(text, topics) {
 
 async function summarize(text, question) {
   return withFallback(
-    () => claudeJson('You condense an expert answer into one short, factual answer line (max 120 characters), in the language of the answer.',
+    () => geminiJson('You condense an expert answer into one short, factual answer line (max 120 characters), in the language of the answer.',
       `Question: ${question}\nExpert answer: ${text}\n\nReturn {"text": "<short answer>"}`),
     () => ({ text: firstStatement(text) })
   ).then(r => ({ ...r, text: String(r.text || firstStatement(text)).slice(0, 300) }));
@@ -109,7 +117,7 @@ async function matchClaim(statement, applicable, allOnTopic = applicable) {
   const claims = [...new Map(allOnTopic.filter(s => s.claim).map(s => [s.claim, s])).values()];
   const used = claims.map(s => s.claim);
   const r = await withFallback(
-    () => claudeJson('You decide whether a new statement means the same thing as one of the existing statements (same rule, maybe different words). Different rules must not match.',
+    () => geminiJson('You decide whether a new statement means the same thing as one of the existing statements (same rule, maybe different words). Different rules must not match.',
       `Existing statements:\n${claims.map(s => `- ${s.claim}: ${s.says}`).join('\n') || '(none)'}\n\nNew statement: ${statement}\n\nReturn {"label": "<matching label, or null if it says something different>"}`),
     () => {
       let best = null;
@@ -124,7 +132,7 @@ async function matchClaim(statement, applicable, allOnTopic = applicable) {
 // doc: {title, body}. topics: [{id, text, vocabulary}]. Returns {topic, answer, countries, via}.
 async function classify(doc, topics) {
   const r = await withFallback(
-    () => claudeJson('You read a company document for an HR/payroll knowledge base and extract what it states.',
+    () => geminiJson('You read a company document for an HR/payroll knowledge base and extract what it states.',
       `Topics:\n${topics.map(t => `- ${t.id}: ${t.text}`).join('\n')}\n\nDocument title: ${doc.title}\nDocument:\n${String(doc.body).slice(0, 6000)}\n\n` +
       'Return {"topic": "<topic id this document answers, or null>", "answer": "<the answer it gives to that topic question, max 120 characters, or null>", "countries": ["<BE|NL|DE it applies to, empty if not stated>"]}', 400),
     () => {
@@ -140,4 +148,4 @@ async function classify(doc, topics) {
   };
 }
 
-module.exports = { enabled, routeQuestion, summarize, matchClaim, classify, detectCountries, keywordRoute, jaccard, MODEL };
+module.exports = { enabled, routeQuestion, summarize, matchClaim, classify, detectCountries, keywordRoute, jaccard, MODEL, PROVIDER };

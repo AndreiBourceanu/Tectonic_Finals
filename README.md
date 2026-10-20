@@ -27,8 +27,8 @@ npm run reseed       # delete the database file and load the demo data again
 | `TRUST_NOW` | value in the DB (`2026-09`) | reference date for freshness |
 | `SEED_DEMO` | `true` | set to `false` to start with an empty database |
 | `TRUST_SQLITE_DRIVER` | auto | force `node:sqlite` or `better-sqlite3` |
-| `ANTHROPIC_API_KEY` | unset | when set, Claude reads content, routes free-text questions and judges agreement |
-| `TRUST_AI_MODEL` | `claude-haiku-5-5` | Claude model used by `src/ai.js` |
+| `GEMINI_API_KEY` | unset | when set (or `GOOGLE_API_KEY`), Google Gemini reads content, routes free-text questions and judges agreement |
+| `TRUST_AI_MODEL` | `gemini-3.8-flash` | Gemini model used by `src/ai.js` |
 | `TRUST_AI` | on | set to `off` to force the local keyword fallback (tests do this) |
 
 ## How everything works
@@ -197,13 +197,13 @@ The goal is not zero human involvement, it is zero unnecessary effort. Each ques
 
 | Signal from existing tools | What Trust Lens does on its own | Code |
 |---|---|---|
-| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Claude reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
-| An employee types a question in their own words (`POST /api/ask`) | Claude routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
+| A message, wiki page or mail arrives through a connector (`POST /api/ingest`) | Gemini reads it, finds which question it answers, extracts the answer and the countries, and decides whether it says the same as existing sources (semantic agreement). Nobody labels a `claim` by hand. | `src/ai.js` (`classify`, `matchClaim`) |
+| An employee types a question in their own words (`POST /api/ask`) | Gemini routes it to the right topic and picks up the country if it is mentioned. | `src/ai.js` (`routeQuestion`) |
 | Everyday work: chat answers, resolved tickets, commits, edits, ownership, one-click confirmations | Builds the **who really knows this** ranking. Every trace fades with a 6-month half-life, so people who moved on stop being suggested without anyone updating a skills matrix. Every suggestion says *why*. | `src/expertise.js`, `repo.signalsForTopic` |
 | The HR system reports a role change (`POST /api/events/role-change`), which SD Worx already knows | The person's documents lose their accountable owner (owner score 0, visible in the explanation) and a handover is proposed to the person the work signals point to. | `src/steward.js` (`roleChange`) |
 | An expert answers a colleague in Teams (`POST /api/expert-replies`) | The answer is captured as a draft source, summarised and checked for agreement. One click publishes it and the gap closes. | `src/steward.js` (`expertReply`) |
 
-Without `ANTHROPIC_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
+Without `GEMINI_API_KEY` (or if the API is unreachable) a transparent keyword fallback does the same jobs, so the demo never depends on the network. Every result says which one produced it (`via`).
 
 ### 2. When is human verification genuinely valuable?
 
@@ -267,7 +267,7 @@ src/seed.js          loads demo data into an empty database
 src/trust.js         scoring and verdict logic (freshness counts from the last confirmation)
 src/expertise.js     who really knows a topic, learned from work signals that fade with time
 src/steward.js       background sweep, attention budget, one-click checks, HR events, expert answers
-src/ai.js            Claude (routing, classification, agreement, summaries) with a keyword fallback
+src/ai.js            Gemini (routing, classification, agreement, summaries) with a keyword fallback
 src/server.js        HTTP API and static UI
 public/index.html    UI
 test/                unit, database and API tests
@@ -281,13 +281,13 @@ demo/demo.js         scripted CLI demo
 - **Add a country:** add it to `COUNTRIES` in `src/trust.js` and to the dropdown in `public/index.html`.
 - **Schema changes:** append a new string to `MIGRATIONS` in `src/db.js`. Never edit an existing one.
 - **Different database:** all SQL is in `src/repo.js`, so moving to PostgreSQL means reimplementing that one file.
-- **Automatic claim extraction:** done through `POST /api/ingest` (Claude, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
+- **Automatic claim extraction:** done through `POST /api/ingest` (Gemini, or the keyword fallback). `POST /api/documents` keeps accepting hand-provided `claim` and `answer`.
 - **Real connectors:** point a Teams/Slack/wiki webhook at `/api/ingest` and the HR system at `/api/events/role-change`.
 
 ## Limitations (proof of concept)
 
 - The demo data is fictional and small.
-- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Claude catches.
+- Without an API key, agreement between sources falls back to word overlap, which misses paraphrases that Gemini catches.
 - Work signals (chat, tickets, commits) and HR events are simulated in `data/seed.json` and the demo controls; real connectors would post to `/api/ingest` and `/api/events/role-change`.
 - Scores are transparent heuristics, not calibrated against real outcomes.
 - No authentication: no accounts, permissions or email verification, and all write routes are open.
