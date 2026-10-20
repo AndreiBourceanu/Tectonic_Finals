@@ -15,7 +15,7 @@ Works on **Node 18.18 or newer** (check with `node --version`).
 
 ```bash
 npm start            # UI + API at http://localhost:3000 (creates and seeds data/trustlens.db on first run)
-npm test             # 82 tests (node:test, in-memory databases, no network)
+npm test             # 84 tests (node:test, in-memory databases, no network)
 npm run demo         # scripted CLI demo: good / conflict / gap, then the finals story (checks, HR event, expert answer, connector)
 npm run llm:check    # confirms your Gemini key works (never prints the key)
 npm run reseed       # delete the database file and load the demo data again

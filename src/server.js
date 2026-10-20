@@ -34,6 +34,8 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
     const q = repo.getQuestionWithSources(questionId);
     const result = answer(q, country, today(), repo.countryCodes());
     result.experts = steward.expertsFor(questionId);
+    // Who to ask comes from the work signals, so it stays right when people change roles.
+    if (result.verdict !== 'rely' && !result.gap && result.experts.length) result.expert = `${result.experts[0].name}${result.experts[0].role ? ', ' + result.experts[0].role : ''}`;
     result.ai = { enabled: ai.enabled(), model: ai.enabled() ? ai.MODEL : null, provider: ai.PROVIDER };
     if (result.verdict !== 'rely') {
       repo.logAnswer({ questionId, country, verdict: result.verdict, gap: result.gap, conflict: !!result.conflict });
@@ -86,7 +88,7 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
       if (m === 'POST' && r1 === 'ask' && parts.length === 2) {
         const { text, country } = await readJson(req);
         if (typeof text !== 'string' || !text.trim() || text.length > 500) throw new HttpError(400, 'text is required (max 500 characters)');
-        const route = await ai.routeQuestion(text.trim(), topics());
+        const route = await ai.routeQuestion(text.trim(), topics(), repo.listCountries());
         const c = route.country || country;
         if (!repo.countryCodes().includes(c)) throw new HttpError(400, `Unknown country "${c}"`);
         if (!route.questionId) {
@@ -152,7 +154,7 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
         const b = await readJson(req, 250_000);
         if (typeof b.title !== 'string' || typeof b.body !== 'string') throw new HttpError(400, 'title and body are required');
         const ts = topics();
-        const cls = await ai.classify({ title: b.title, body: b.body }, ts);
+        const cls = await ai.classify({ title: b.title, body: b.body }, ts, repo.listCountries());
         const countries = b.countries && b.countries.length ? b.countries : cls.countries.length ? cls.countries : repo.countryCodes();
         let claim = null;
         if (cls.topic && cls.answer) {
