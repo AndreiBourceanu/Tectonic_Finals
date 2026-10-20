@@ -121,6 +121,9 @@ A plain Node `http` server with no framework.
 | POST | `/api/upload` | upload a new file or a new version of one (email required) |
 | POST | `/api/ask` | the search bar. Body `{query, country, useLlm}`. Returns `answers` (one verdict per question or standalone document, each with scored sources), `found`, `llmAvailable` and `llm: {used, model, error, cached, keywords, people, question}` |
 | POST | `/api/draft` | body `{query, country}`. Second model call: a short drafted answer from the strongest sources. Returns `{draft: {answer, covered, sources, model, cached} \| null, reason}`; `reason` is `disabled`, `no-source` or `error` |
+| POST | `/api/diagnose` | body `{file}`. Result of the knowledge check for a document (the one the upload or edit already started in the background, or a new run): `{findings, compared, resolved, llm}` |
+| GET | `/api/findings?status=&file=` | findings (`open` by default; `resolved`, `dismissed` or `all`), each with its documents, quotes and suggested contacts |
+| POST | `/api/findings/:id/status` | body `{status}` (`open`, `resolved`, `dismissed`). Returns the finding |
 | GET | `/api/search?q=` | plain keyword match over questions and documents (used internally and kept for API users) |
 | GET | `/api/countries` | countries in use |
 | POST | `/api/countries` | body `{country}` (name or ISO code); adds a real country, `201` if new, `200` if it already existed, `400` if not a country |
@@ -189,6 +192,19 @@ The heading of the result is **the user's own query**: a stored question is only
 
 The page shows step 1 immediately ("Refining with Gemini…"), then replaces it with step 4's result and a line saying what the model understood. If the model is off, slow or fails, the quick results stay, with the reason shown, so search never depends on the LLM. Interpretations are cached in memory (50 entries, keyed by the query and the size of the vocabulary), so a repeated question does not call the model again. The country always comes from the selector, never from the model. Only the quick search is written to the gap log, and only for the top answer when it is a stored question that is not "rely".
 
+### 5f. Knowledge check (`src/diagnose.js`)
+
+After every upload or edit (`/api/upload`, `POST` and `PUT /api/documents`), the server starts a check in the background, so the upload answers at once and the page asks for the result (`POST /api/diagnose`, which waits for the same run).
+
+1. **Settle old findings.** Open findings about an earlier *version* of this document are marked resolved ("a document it was about was updated"). Findings record the document versions they were based on.
+2. **Neighbours (`repo.neighbours`).** The 4 documents that share the most keywords with the changed one, plus the documents of the same stored question.
+3. **Local rules (always run, no model).** Same question with different claims for a shared country (conflict); a country that other documents cover but no source about this question covers (gap); documents with no owner; documents not updated for more than 36 months (outdated).
+4. **Model diagnosis (`llm.diagnose`).** The changed document (up to 6,000 characters) and its neighbours (4,000 each, 20,000 in total) go into one prompt, with the people list. The model reports conflicts, duplicates, outdated documents and gaps with an explanation, a suggested fix and up to two people to contact. This finds contradictions without any hand-written label, so an uploaded document is compared with the others.
+5. **Validation (`sanitizeDiagnosis`).** A finding is kept only if its document numbers are real, its **quotes occur verbatim in the document** (markdown and spacing ignored), and a conflict, duplicate or outdated finding has at least one verified quote. Contacts must be names in the people table; if none is valid, the owners and last editors of the documents involved are used. One verified side only lowers "high" confidence to "medium". At most 5 findings.
+6. **Storage (`findings`, `finding_documents`, `finding_contacts`).** An open finding about the same documents is refreshed, not duplicated. A dismissed finding is not brought back unless one of its documents changed. If the model and the local rules find the same conflict, there is one finding with the model's wording.
+
+The page shows a **Knowledge check** card under every upload and a **Knowledge health** list of all open findings, each with the evidence, how to fix it, who can help (with a pre-filled email link when the person has an address) and a *Dismiss* button. If the model fails, the local findings still show, with the reason. The model never changes data: it only proposes findings.
+
 ### 5c. Countries
 
 `src/countries.js` holds the official ISO 3166-1 list and resolves what the user types (name, code, accents, a few aliases). `repo.addCountry()` stores only resolved countries. Document validation and `/api/answer` check against the `countries` table, so a country must be added before it can be used.
@@ -223,6 +239,7 @@ Run `npm run demo` to see all four in the terminal.
 - `countries.test.js`: the ISO list, resolving names and codes, rejecting invented countries, using a new country, email to people record.
 - `upload.test.js`: metadata generation, upload and update, email ownership, manual keywords, duplicates, size limit, search.
 - `ask.test.js`: closed-vocabulary check, query prompt, search without and with the model (stubbed), model failure, cache, standalone documents, relevance order, gap log, and the draft step (which sources are sent, only those applying to the country, no call when none apply, failure, cache, prompt caps and injection guard, citation validation).
+- `diagnose.test.js`: local rules, no duplicates on a second run, automatic check after an upload, model findings and suggested people, one finding for the same conflict, model failure, dismiss and resolve-on-edit, endpoint validation, validation of the model output (invented quotes, people and documents), prompt caps, the real client.
 - `api.test.js`: read endpoints, input validation, size limits, 404s.
 
 ## Project layout
@@ -235,6 +252,7 @@ src/repo.js          all SQL, validation and transactions
 src/countries.js     ISO 3166-1 country list and name/code resolver
 src/llm.js           Gemini client (document analysis, query interpretation, validation)
 src/ask.js           search bar: interpretation, retrieval, grouping, scoring and the drafted answer
+src/diagnose.js      knowledge check after an upload or edit (local rules + model, findings)
 src/env.js           .env / *.env loader
 src/metadata.js      built-in fallback for summary/keywords
 scripts/llm-check.js checks the Gemini key
@@ -260,6 +278,7 @@ demo/demo.js         scripted CLI demo
 - The demo data is fictional and small.
 - `claim` labels are provided by hand, so conflict detection is only as good as those labels.
 - The LLM fills metadata on upload and interprets search queries. It does not yet extract claims or link documents to questions, so an uploaded document is scored alone (no agreement or conflict) until someone gives it a topic and claim through the API.
+- The knowledge check compares a document with its 4 nearest neighbours only, so a conflict with a document that shares no keywords is not seen. The local ownership and age rules also flag neighbours that were not changed (dismiss them if they are not a concern). Findings are proposals: nothing is notified or changed automatically, and the contact link just opens an email.
 - The drafted answer is only as good as the attached text: long documents are cut at 6,000 characters, and a model can still misread a source. That is why it cites its sources and sits next to the trust scores.
 - Search quality depends on the keywords stored. With thousands of keywords the list sent to the model would need pre-filtering.
 - Scores are transparent heuristics, not calibrated against real outcomes.

@@ -10,6 +10,7 @@ const { openDb, driverName } = require('./db');
 const { createRepo, HttpError } = require('./repo');
 const { seedIfEmpty } = require('./seed');
 const { ask, draft } = require('./ask');
+const { diagnose } = require('./diagnose');
 
 const INDEX = path.join(__dirname, '..', 'public', 'index.html');
 
@@ -19,6 +20,17 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
   if (process.env.SEED_DEMO !== 'false') seedIfEmpty(repo); // demo data only when the DB is empty
   repo.backfillMetadata();
   const today = () => now || process.env.TRUST_NOW || repo.getSetting('now');
+
+  // Knowledge check after every upload or edit. It runs in the background so the upload answers at once; the page
+  // asks for the result (POST /api/diagnose) and gets the same run. A failure never affects the upload.
+  const checks = new Map();
+  const startCheck = file => {
+    const p = diagnose({ repo, llm, file, now: today() })
+      .catch(e => { if (!/not open|closed/i.test(e.message)) console.warn(`Knowledge check failed for ${file}: ${e.message}`); return null; })
+      .finally(() => { if (checks.get(file) === p) checks.delete(file); });
+    checks.set(file, p);
+    return p;
+  };
 
   const send = (res, code, body, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -69,7 +81,9 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
         if (m === 'GET' && parts.length === 2) return send(res, 200, repo.listDocuments());
         if (m === 'POST' && parts.length === 2) {
           const body = await readJson(req, 500_000);
-          return send(res, 201, repo.createDocument(body, String(body.editedBy || 'api').slice(0, 80)));
+          const created = repo.createDocument(body, String(body.editedBy || 'api').slice(0, 80));
+          startCheck(created.file);
+          return send(res, 201, created);
         }
         if (m === 'GET' && parts.length === 3) {
           const doc = repo.getDocument(file);
@@ -83,7 +97,9 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
         }
         if (m === 'PUT' && parts.length === 3) {
           const body = await readJson(req, 500_000);
-          return send(res, 200, repo.updateDocument(file, body, String(body.editedBy || 'api').slice(0, 80)));
+          const updated = repo.updateDocument(file, body, String(body.editedBy || 'api').slice(0, 80));
+          startCheck(updated.file);
+          return send(res, 200, updated);
         }
       }
       if (m === 'POST' && r1 === 'ask' && parts.length === 2) { // the search bar: { query, country, useLlm }
@@ -115,7 +131,26 @@ function createServer({ now, db = openDb(), llm = null } = {}) {
           if (r.ok) ai = r.ai; else { llmError = r.error; console.warn(`LLM unavailable, using the built-in fallback: ${r.detail || r.error}`); }
         }
         const result = repo.saveUpload(body, { ai });
+        startCheck(result.document.file);
         return send(res, result.action === 'created' ? 201 : 200, { ...result, llm: { used: !!ai, model: ai ? llm.model : null, error: llmError } });
+      }
+      if (m === 'POST' && r1 === 'diagnose' && parts.length === 2) { // result of the knowledge check for one document
+        const body = await readJson(req);
+        const f = typeof body.file === 'string' ? body.file : '';
+        if (!repo.getDocument(f)) throw new HttpError(404, 'Document not found');
+        const result = await (checks.get(f) || startCheck(f));
+        return send(res, 200, result || { file: f, findings: repo.listFindings({ status: 'open', file: f }), llm: { used: false, model: null, error: 'failed' }, compared: [] });
+      }
+      if (r1 === 'findings') {
+        if (m === 'GET' && parts.length === 2) {
+          const st = url.searchParams.get('status') || 'open';
+          if (st !== 'all' && !['open', 'resolved', 'dismissed'].includes(st)) throw new HttpError(400, 'status must be open, resolved, dismissed or all');
+          return send(res, 200, repo.listFindings({ status: st === 'all' ? null : st, file: url.searchParams.get('file') || null }));
+        }
+        if (m === 'POST' && parts.length === 4 && parts[3] === 'status' && /^\d{1,9}$/.test(parts[2])) {
+          const body = await readJson(req);
+          return send(res, 200, repo.setFindingStatus(Number(parts[2]), body.status));
+        }
       }
       if (m === 'GET' && r1 === 'people' && parts.length === 2) return send(res, 200, repo.listPeople());
       if (m === 'GET' && r1 === 'gaps' && parts.length === 2) return send(res, 200, repo.gapReport());

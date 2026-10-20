@@ -407,6 +407,103 @@ function createRepo(db) {
     }));
   }
 
+  // ---- findings (knowledge check) -------------------------------------------------------
+  const FINDING_KINDS = ['conflict', 'gap', 'duplicate', 'outdated', 'ownership'];
+  const FINDING_STATUS = ['open', 'resolved', 'dismissed'];
+  const docRow = file => one('SELECT id, file, title, version, topic, owner_id, editor_id FROM documents WHERE file = ?', file);
+
+  // Other documents that share the most keywords with this one, plus the documents of the same question.
+  function neighbours(file, limit = 4) {
+    const d = docRow(file);
+    if (!d) return [];
+    const score = new Map();
+    for (const r of all(`SELECT d2.file AS f, COUNT(*) AS n FROM document_keywords a
+        JOIN document_keywords b ON b.keyword = a.keyword AND b.document_id <> a.document_id
+        JOIN documents d2 ON d2.id = b.document_id WHERE a.document_id = ? GROUP BY d2.id`, d.id)) score.set(r.f, r.n);
+    if (d.topic) for (const r of all('SELECT file FROM documents WHERE topic = ? AND id <> ?', d.topic, d.id)) score.set(r.file, (score.get(r.file) || 0) + 100);
+    return [...score.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit).map(([f]) => getDocument(f));
+  }
+  const countriesInUse = () => all('SELECT DISTINCT country FROM document_countries ORDER BY country').map(r => r.country);
+  const personByName = name => { const r = one('SELECT id, name, role, email FROM people WHERE name = ? COLLATE NOCASE ORDER BY id LIMIT 1', String(name || '').trim()); return r || null; };
+  // Owners and last editors of the given documents: the people who can most likely fix a finding about them.
+  function peopleOfDocuments(files) {
+    const out = new Map();
+    for (const f of files) {
+      const d = docRow(f);
+      if (!d) continue;
+      for (const id of [d.owner_id, d.editor_id]) {
+        if (!id || out.has(id)) continue;
+        const p = one('SELECT id, name, role, email FROM people WHERE id = ?', id);
+        if (p) out.set(id, p);
+      }
+    }
+    return [...out.values()];
+  }
+
+  const fingerprintOf = f => `${f.kind}|${[...new Set(f.files.map(x => x.file))].sort().join(',')}|${f.key || ''}`;
+
+  // finding: { kind, confidence, explanation, action, source, key?, files: [{file, quote}], contacts: [{personId, reason}] }
+  // An open finding of the same kind about the same documents is refreshed; a dismissed one is not brought back unless
+  // one of its documents changed since. Returns the ids of the findings that are open afterwards.
+  function saveFindings(triggerFile, findings) {
+    return transaction(() => {
+      const ids = [];
+      for (const f of findings) {
+        if (!FINDING_KINDS.includes(f.kind) || !f.files.length) continue;
+        const fp = fingerprintOf(f);
+        const prev = one('SELECT id, status FROM findings WHERE fingerprint = ? ORDER BY id DESC LIMIT 1', fp);
+        let id;
+        if (prev && prev.status === 'open') {
+          id = prev.id;
+          run("UPDATE findings SET confidence = ?, explanation = ?, action = ?, source = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+            f.confidence || 'medium', f.explanation, f.action || '', f.source || 'local', id);
+          run('DELETE FROM finding_documents WHERE finding_id = ?', id);
+          run('DELETE FROM finding_contacts WHERE finding_id = ?', id);
+        } else {
+          if (prev && prev.status === 'dismissed') {
+            const changed = one(`SELECT 1 AS x FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE fd.finding_id = ? AND fd.version <> d.version`, prev.id);
+            if (!changed) continue; // the person said "not a problem" and nothing changed
+          }
+          id = Number(run('INSERT INTO findings(kind, confidence, explanation, action, source, fingerprint, trigger_file) VALUES(?,?,?,?,?,?,?)',
+            f.kind, f.confidence || 'medium', f.explanation, f.action || '', f.source || 'local', fp, triggerFile).lastInsertRowid);
+        }
+        for (const x of f.files) {
+          const d = docRow(x.file);
+          if (d) run('INSERT OR IGNORE INTO finding_documents(finding_id, document_id, version, quote) VALUES(?,?,?,?)', id, d.id, d.version, String(x.quote || '').slice(0, 300));
+        }
+        for (const c of f.contacts || []) run('INSERT OR IGNORE INTO finding_contacts(finding_id, person_id, reason) VALUES(?,?,?)', id, c.personId, String(c.reason || '').slice(0, 200));
+        ids.push(Number(id));
+      }
+      return ids;
+    });
+  }
+
+  // Editing a document settles what earlier findings said about its old version.
+  function resolveStaleFindings(file) {
+    return run(`UPDATE findings SET status = 'resolved', resolved_note = 'A document it was about was updated.', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE status = 'open' AND id IN (SELECT fd.finding_id FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE d.file = ? AND fd.version <> d.version)`, file).changes;
+  }
+
+  function listFindings({ status = 'open', file = null } = {}) {
+    const rows = all(`SELECT * FROM findings WHERE (? IS NULL OR status = ?)
+        AND (? IS NULL OR id IN (SELECT fd.finding_id FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE d.file = ?))
+        ORDER BY CASE confidence WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, id DESC`, status, status, file, file);
+    return rows.map(r => ({
+      id: r.id, kind: r.kind, confidence: r.confidence, explanation: r.explanation, action: r.action, status: r.status, source: r.source,
+      createdAt: r.created_at, triggerFile: r.trigger_file,
+      documents: all(`SELECT d.file, d.title, fd.version, d.version AS current, fd.quote FROM finding_documents fd JOIN documents d ON d.id = fd.document_id WHERE fd.finding_id = ? ORDER BY d.file`, r.id)
+        .map(x => ({ file: x.file, title: x.title, version: x.version, current: x.current, quote: x.quote })),
+      contacts: all(`SELECT p.id, p.name, p.role, p.email, c.reason FROM finding_contacts c JOIN people p ON p.id = c.person_id WHERE c.finding_id = ? ORDER BY p.name`, r.id)
+        .map(x => ({ id: x.id, name: x.name, role: x.role, email: x.email, reason: x.reason }))
+    }));
+  }
+  function setFindingStatus(id, status) {
+    if (!FINDING_STATUS.includes(status)) bad('status must be open, resolved or dismissed');
+    if (!one('SELECT 1 AS x FROM findings WHERE id = ?', id)) throw new HttpError(404, 'Finding not found');
+    run("UPDATE findings SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", status, id);
+    return listFindings({ status: null }).find(f => f.id === id);
+  }
+
   // ---- answer log (knowledge gaps) -----------------------------------------------------
   const logAnswer = ({ questionId, country, verdict, gap, conflict }) =>
     run('INSERT INTO answer_log(question_id, country, verdict, gap, conflict) VALUES(?,?,?,?,?)', questionId, country, verdict, gap ? 1 : 0, conflict ? 1 : 0);
@@ -424,7 +521,8 @@ function createRepo(db) {
   return {
     transaction, getSetting, setSetting, upsertQuestion, listQuestions, countQuestions, listPeople,
     countDocuments, listDocuments, getDocument, getQuestionWithSources, createDocument, updateDocument,
-    saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, retrieve, getQuestion, documentVersions, logAnswer, gapReport
+    saveUpload, checkUpload, suggestClaim, backfillMetadata, listCountries, countryCodes, addCountry, listTypes, listKeywords, search, retrieve, getQuestion, documentVersions,
+    neighbours, countriesInUse, personByName, peopleOfDocuments, saveFindings, resolveStaleFindings, listFindings, setFindingStatus, logAnswer, gapReport
   };
 }
 

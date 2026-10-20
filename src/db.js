@@ -153,6 +153,39 @@ const MIGRATIONS = [
     name TEXT NOT NULL
   );
   INSERT INTO countries(code, name) VALUES ('BE','Belgium'),('NL','Netherlands'),('DE','Germany');
+  `,
+  // v6: findings. Conflicts, gaps, duplicates and so on that the knowledge check found after an upload or an edit.
+  // Each finding records the document VERSIONS it was based on, so editing a document resolves what it concerned.
+  `
+  CREATE TABLE findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('conflict','gap','duplicate','outdated','ownership')),
+    confidence TEXT NOT NULL DEFAULT 'medium' CHECK (confidence IN ('high','medium','low')),
+    explanation TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','dismissed')),
+    source TEXT NOT NULL DEFAULT 'local' CHECK (source IN ('local','llm')),
+    fingerprint TEXT NOT NULL,
+    trigger_file TEXT,
+    resolved_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX idx_findings_status ON findings(status);
+  CREATE INDEX idx_findings_fingerprint ON findings(fingerprint);
+  CREATE TABLE finding_documents (
+    finding_id INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    document_id INTEGER NOT NULL REFERENCES documents(id),
+    version INTEGER NOT NULL,
+    quote TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (finding_id, document_id)
+  );
+  CREATE TABLE finding_contacts (
+    finding_id INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES people(id),
+    reason TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (finding_id, person_id)
+  );
   `
 ];
 

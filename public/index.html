@@ -51,6 +51,13 @@ pre.file{white-space:pre-wrap;font:.82rem/1.5 ui-monospace,Menlo,monospace;backg
 [hidden]{display:none!important}
 .sep{border:0;border-top:1px solid var(--line,#ddd);margin:26px 0}
 h3.sub{font-size:1rem;margin:14px 0 8px}
+.find{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--mid);border-radius:10px;padding:12px 14px;margin:10px 0}
+.find.conflict{border-left-color:var(--bad)}.find.gap{border-left-color:var(--acc)}
+.find .ftop{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+.find .q{font-size:.85rem;color:var(--mute);border-left:2px solid var(--line);padding:2px 8px;margin:4px 0}
+.find .fix{margin:8px 0}.find .who{font-size:.9rem;margin:6px 0}
+.find .acts{display:flex;gap:10px;align-items:center;margin-top:8px}
+.kcheck{margin:12px 0}
 .draft{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;padding:14px 16px;margin:14px 0}
 .draft .lab{font-size:.8rem;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
 .draft .txt{font-size:1.05rem;line-height:1.5}
@@ -106,6 +113,10 @@ footer{margin-top:28px;color:var(--mute);font-size:.85rem}
 </form>
 <div id="uresult" aria-live="polite"></div>
 
+<h2 id="health-h">Knowledge health <span class="tag" id="fcount">0</span></h2>
+<p class="mute" style="margin-top:-6px">After every upload or edit, Trust Lens checks the documents around it for conflicts, gaps, duplicates and outdated or unowned knowledge, and suggests who can fix each one.</p>
+<div id="health" aria-live="polite"></div>
+
 <details id="lib"><summary>Library: all documents</summary><div id="libbody"></div></details>
 <footer id="foot">Proof of concept with fictional documents and people. Summary, keywords and type are generated automatically.</footer>
 </main>
@@ -130,6 +141,38 @@ function docCard(d){
  <div class="mute" style="font-size:.85rem">${d.owner?'Owner: '+esc(d.owner):'No owner'} · updated ${esc(d.date)} · applies to ${esc(d.countries.join(', '))}</div>
  <button type="button" class="link" data-open="${esc(d.file)}">${S.shown[d.file]?'Hide':'Open'} source file</button>${S.shown[d.file]?'<pre class="file">'+esc(S.texts[d.file])+'</pre>':''}</div>`;
 }
+/* ---------- knowledge check ---------- */
+const KIND={conflict:'Conflict',gap:'Gap',duplicate:'Duplicate',outdated:'Outdated',ownership:'No owner'};
+function mailto(f,c){
+ const subj='Knowledge issue: '+(KIND[f.kind]||f.kind)+' - '+f.documents.map(d=>d.title).join(' / ');
+ const body='Hello '+c.name+',\n\nTrust Lens found a possible problem in our knowledge base:\n'+f.explanation+'\n\nSuggested fix: '+f.action+'\n\nCould you take a look?';
+ return 'mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body);
+}
+function findingCard(f,dismiss){
+ const docs=f.documents.map(d=>`<div><strong>${esc(d.title)}</strong>${d.quote?`<div class="q">“${esc(d.quote)}”</div>`:''}</div>`).join('');
+ const who=f.contacts.length?`<div class="who"><strong>Who can help:</strong> ${f.contacts.map(c=>`${esc(c.name)}${c.role?' ('+esc(c.role)+')':''}${c.reason?', '+esc(c.reason):''}${c.email?` · <a href="${esc(mailto(f,c))}">email</a>`:''}`).join('; ')}</div>`:'';
+ return `<div class="find ${esc(f.kind)}"><div class="ftop"><span class="tag">${esc(KIND[f.kind]||f.kind)}</span><span class="tag">${esc(f.confidence)} confidence</span>${f.source==='llm'?'<span class="tag">checked by the model</span>':''}</div>
+ <div>${esc(f.explanation)}</div>${docs}${f.action?`<div class="fix"><strong>How to fix:</strong> ${esc(f.action)}</div>`:''}${who}
+ ${dismiss?`<div class="acts"><button type="button" class="link" data-fstatus="${f.id}|dismissed">Dismiss, not a problem</button></div>`:''}</div>`;
+}
+async function loadHealth(){
+ try{
+  const list=await api('/api/findings?status=open');
+  $('fcount').textContent=list.length;
+  $('health').innerHTML=list.length?list.map(f=>findingCard(f,true)).join(''):'<div class="mute">No open problems. Upload or edit a document to run a check.</div>';
+ }catch(e){$('health').innerHTML=`<div class="banner">${esc(e.message)}</div>`}
+}
+async function checkUploaded(file,id){
+ const box=document.getElementById(id);if(!box)return;
+ box.innerHTML='<div class="mute" role="status">Checking how this document fits the rest of the knowledge…</div>';
+ let r;
+ try{r=await api('/api/diagnose',{file})}catch(e){box.innerHTML=`<div class="mute">Knowledge check unavailable (${esc(e.message)}).</div>`;return}
+ const note=r.llm.used?`Compared with ${r.compared.length} related document(s) by ${esc(r.llm.model)}.`:r.llm.error&&r.llm.error!=='nothing-to-compare'?`The model could not be used (${esc(r.llm.error)}); only the built-in checks ran.`:'Built-in checks only.';
+ box.innerHTML=`<h3 class="sub">Knowledge check</h3><div class="mute">${note}${r.resolved?` ${r.resolved} earlier finding(s) were settled by this edit.`:''}</div>`+
+  (r.findings.length?r.findings.map(f=>findingCard(f,true)).join(''):'<div class="okmsg"><strong>No conflicts or gaps found.</strong> This document fits the knowledge around it.</div>');
+ loadHealth();
+}
+
 function viaText(d){
  const w=[];
  if(d.keywords.length)w.push('keywords '+d.keywords.map(k=>'<span class="kw">'+esc(k)+'</span>').join(' '));
@@ -243,7 +286,7 @@ async function upload(e){
  $('go').disabled=true;$('go').textContent='Analysing…';
  try{
   const r=await api('/api/upload',body);
-  showUploaded(r);await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
+  showUploaded(r);checkUploaded(r.document.file,'kcheck');await loadDocs();await loadLists();S.file=null;$('fname').textContent='';$('file').value='';$('kwin').value='';$('type').value='';
  }catch(x){err(x.message)}finally{$('go').disabled=false;syncForm()}
 }
 function showUploaded(r){
@@ -261,7 +304,7 @@ function showUploaded(r){
  <dt>Keywords</dt><dd>${kws(d.keywords)}</dd>
  ${d.topic?'<dt>Linked question</dt><dd>'+esc(d.topic)+' · “'+esc(d.says)+'” (claim '+esc(d.claim)+')</dd>':''}
  <dt>File</dt><dd>${esc(d.originalName||d.file)} · ${d.sizeBytes} bytes · version ${d.version}</dd>
- <dt>Metadata source</dt><dd>${esc(d.metaSource)} <span class="mute">${d.metaSource==='llm'?'(Gemini)':d.metaSource==='heuristic'?'(built-in fallback)':''}</span></dd></dl></div>`;
+ <dt>Metadata source</dt><dd>${esc(d.metaSource)} <span class="mute">${d.metaSource==='llm'?'(Gemini)':d.metaSource==='heuristic'?'(built-in fallback)':''}</span></dd></dl></div><div id="kcheck" class="kcheck"></div>`;
  $('uresult').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 
@@ -299,6 +342,7 @@ async function addCountry(){
 
 /* ---------- init + events ---------- */
 async function init(){
+ loadHealth();
  try{
   const q=await api('/api/questions');S.questions=q.questions;
   renderCountries(q.countryList);
@@ -309,8 +353,9 @@ async function init(){
  }catch(e){$('results').innerHTML=`<div class="banner">Could not reach the backend: ${esc(e.message)}</div>`}
 }
 document.addEventListener('click',async e=>{
- const t=e.target.closest('[data-q],[data-open],[data-bar],[data-kw]');if(!t)return;
- if(t.dataset.kw){const cur=$('kwin').value.split(',').map(x=>x.trim()).filter(Boolean);if(!cur.includes(t.dataset.kw))cur.push(t.dataset.kw);$('kwin').value=cur.join(', ')}
+ const t=e.target.closest('[data-q],[data-open],[data-bar],[data-kw],[data-fstatus]');if(!t)return;
+ if(t.dataset.fstatus){const[id,st]=t.dataset.fstatus.split('|');t.disabled=true;try{await api('/api/findings/'+id+'/status',{status:st})}catch(x){alert(x.message)}document.querySelectorAll('[data-fstatus="'+t.dataset.fstatus+'"]').forEach(b=>{const c=b.closest('.find');if(c&&c.parentElement&&c.parentElement.id==='kcheck')c.remove()});await loadHealth()}
+ else if(t.dataset.kw){const cur=$('kwin').value.split(',').map(x=>x.trim()).filter(Boolean);if(!cur.includes(t.dataset.kw))cur.push(t.dataset.kw);$('kwin').value=cur.join(', ')}
  else if(t.dataset.q){showAnswer(t.dataset.q)}
  else if(t.dataset.bar){const[k,b]=t.dataset.bar.split('|');S.open[k]=b;S.noScroll=true;await rerender();S.noScroll=false}
  else if(t.dataset.open){
